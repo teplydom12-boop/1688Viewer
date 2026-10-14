@@ -13,19 +13,28 @@ async function createHarness(browser, t) {
   const first = fs.readFileSync(path.join(__dirname, "../fixtures/results.html"), "utf8");
   const second = fs.readFileSync(path.join(__dirname, "../fixtures/results-page2.html"), "utf8");
   const page = await context.newPage();
-  await page.addInitScript(() => {
+  async function preparePage(target) {
+  await target.addInitScript(() => {
     globalThis.__contentMessages = [];
     globalThis.chrome = { runtime: { onMessage: { addListener: listener => __contentMessages.push(listener) } } };
   });
-  await page.addInitScript({ path: path.join(extensionPath, "shared.js") });
-  await page.addInitScript({ path: path.join(extensionPath, "content.js") });
-  await page.route("**/*", route => {
+  await target.addInitScript({ path: path.join(extensionPath, "shared.js") });
+  await target.addInitScript({ path: path.join(extensionPath, "engine.js") });
+  await target.addInitScript({ path: path.join(extensionPath, "content.js") });
+  }
+  const flags = { detailChallenge: false };
+  const detailHtml = '<!doctype html><h1>Detail cup</h1><a class="company-name" href="https://cupfactory.1688.com/">浙江水杯工厂</a><span class="price">¥15</span>';
+  await preparePage(page);
+  await context.route("**/*", route => {
     if (route.request().resourceType() !== "document") return route.abort();
+    if (/\/offer\/\d+\.html/.test(route.request().url())) return route.fulfill({ contentType: "text/html; charset=utf-8", body: flags.detailChallenge ? '<div class="nc-container">滑动验证</div>' : detailHtml });
     const isSecond = new URL(route.request().url()).searchParams.get("page") === "2";
     return route.fulfill({ contentType: "text/html; charset=utf-8", body: isSecond ? second : first });
   });
   const initialUrl = "https://s.1688.com/selloffer/offer_search.htm?keywords=%E6%B0%B4%E6%9D%AF&page=1";
   await page.goto(initialUrl);
+  const tabs = new Map([[1, page]]);
+  let nextTabId = 2;
   const data = {};
   const downloads = [];
   const observers = [];
@@ -58,10 +67,12 @@ async function createHarness(browser, t) {
       async remove(keys) { for (const key of keys) delete data[key]; }
     } },
     tabs: {
-      async get(id) { return { id, url: page.url(), status: "complete" }; },
+      async get(id) { const target = tabs.get(id); if (!target) throw new Error("Tab closed"); return { id, url: target.url(), status: "complete" }; },
       async query() { return [{ id: 1, url: page.url(), status: "complete" }]; },
+      async create({ url }) { const target = await context.newPage(); const id = nextTabId++; tabs.set(id, target); await preparePage(target); await target.goto(url); return { id, url, status: "complete" }; },
+      async update(id, options) { const target = tabs.get(id); if (options.url) await target.goto(options.url); if (options.active) await target.bringToFront(); return { id, url: target.url(), status: "complete" }; },
       async sendMessage(id, message) {
-        return page.evaluate(message => new Promise((resolve, reject) => {
+        return tabs.get(id).evaluate(message => new Promise((resolve, reject) => {
           if (!globalThis.__contentMessages?.length) return reject(new Error("Receiving end does not exist"));
           for (const listener of __contentMessages) listener(message, {}, resolve);
         }), message);
@@ -108,7 +119,7 @@ async function createHarness(browser, t) {
     throw new Error(`Background harness timed out: ${JSON.stringify(data.run)}`);
   }
   return {
-    context, page, command, waitFor, data, downloads, observers, initialUrl,
+    context, page, command, waitFor, data, downloads, observers, initialUrl, flags, tabs, detailHtml,
     idle: () => !vm.runInContext("processing || starting", sandbox),
     resume() { restart(); startupHandlers[0](); }
   };

@@ -1,0 +1,108 @@
+"use strict";
+const $ = id => document.getElementById(id);
+const S = globalThis.SupplierCollector;
+let state = null, initialized = false, refreshing = false, pendingRefresh = false, pendingData = false;
+const expanded = new Set();
+const stages = { loading: "Загрузка", scrolling: "Догрузка выдачи", saved: "Сохранение", waiting: "Пауза между переходами", search: "Сбор выдачи", navigate: "Переход", details: "Проверка карточек", detail: "Данные поставщика", "detail-saved": "Карточка сохранена", paused: "Работа приостановлена", stopped: "Работа остановлена", finished: "Завершено" };
+async function send(type, options) { const response = await chrome.runtime.sendMessage({ target: "1688-background", type, options }); if (!response?.ok) throw new Error(response?.error || "Расширение не ответило."); return response.result; }
+function error(error) { $("error").textContent = error?.message || String(error); $("error").hidden = false; }
+async function action(operation) { $("error").hidden = true; try { await operation(); await refresh(true); } catch (e) { error(e); } }
+function element(tag, content, className) { const node = document.createElement(tag); if (content != null) node.textContent = content; if (className) node.className = className; return node; }
+function safeLink(url, label) { const node = element("a", label); if (S.isMarketplaceUrl(url)) node.href = url; node.target = "_blank"; node.rel = "noopener noreferrer"; return node; }
+function productTable(products) {
+  const table = element("table", null, "product-tree");
+  const head = element("thead"); const row = element("tr"); ["Товар", "Цена", "Минимальный заказ", "Карточка"].forEach(label => row.append(element("th", label))); head.append(row);
+  const body = element("tbody");
+  for (const product of products) {
+    const row = element("tr"); const title = element("td", product.title || "Название не получено", "title-cell");
+    title.append(element("small", `ID: ${product.product_id}${product.query ? " · " + product.query : ""}`));
+    const price = element("td", product.price || "—"); const moq = element("td", product.minimum_order || "—");
+    const link = element("td"); link.append(safeLink(product.product_url, "Открыть ↗"));
+    row.append(title, price, moq, link); body.append(row);
+  }
+  table.append(head, body); return table;
+}
+function renderTable() {
+  if (!state) return;
+  const filter = $("filter").value.trim().toLowerCase(), source = $("source-filter").value;
+  const match = product => (!source || product.source === source) && (!filter || [product.title, product.shop_name, product.supplier_id, product.product_id].some(value => String(value || "").toLowerCase().includes(filter)));
+  const groups = state.suppliers.map(group => ({ ...group, products: group.products.filter(match) })).filter(group => group.products.length);
+  const body = $("suppliers"); body.replaceChildren();
+  for (const group of groups) {
+    const row = element("tr");
+    const name = element("td"); const toggle = element("button", `${expanded.has(group.key) ? "▾" : "▸"} ${group.shop_name || "Имя магазина не получено"}`, "supplier-name");
+    toggle.setAttribute("aria-expanded", String(expanded.has(group.key)));
+    toggle.addEventListener("click", () => { if (expanded.has(group.key)) expanded.delete(group.key); else expanded.add(group.key); renderTable(); });
+    name.append(toggle, element("small", group.supplier_id || group.supplier_url || "", "supplier-id"));
+    const sourceCell = element("td"); sourceCell.append(element("span", group.source, "pill"));
+    const shop = element("td"); shop.append(group.supplier_url ? safeLink(group.supplier_url, "Магазин ↗") : element("span", "Ссылка не получена", "muted"));
+    const quality = element("td"); quality.append(element("span", group.shop_name && group.supplier_url ? "Магазин получен" : "Нужна проверка", `pill ${group.shop_name && group.supplier_url ? "good" : "pending"}`));
+    row.append(name, sourceCell, element("td", group.products.length), shop, quality); body.append(row);
+    const tree = element("tr", null, "tree-row"); tree.hidden = !expanded.has(group.key); const cell = element("td"); cell.colSpan = 5; cell.append(productTable(group.products)); tree.append(cell); body.append(tree);
+  }
+  const unresolved = state.unresolved.filter(match);
+  $("unresolved").replaceChildren(...unresolved.map(product => {
+    const node = element("div", null, "unresolved-product"); node.append(safeLink(product.product_url, product.title || `Товар ${product.product_id}`), element("small", `${product.source} · ${product.price || "Цена не указана"}${product.shop_name ? " · " + product.shop_name : ""}`)); return node;
+  }));
+  $("unresolved-section").hidden = !unresolved.length;
+  $("empty").hidden = Boolean(groups.length || unresolved.length);
+  $("filtered-count").textContent = `${groups.length} поставщиков · ${groups.reduce((count, group) => count + group.products.length, 0) + unresolved.length} товаров`;
+}
+async function refreshTabs() {
+  const tabs = await send("TABS"); const previous = $("tab").value;
+  $("tab").replaceChildren(...tabs.map(tab => { const option = element("option", `${tab.source}: ${tab.title}`); option.value = tab.id; return option; }));
+  if (!tabs.length) { const option = element("option", "Откройте вкладку с поисковой выдачей"); option.value = ""; $("tab").append(option); }
+  else if (tabs.some(tab => String(tab.id) === previous)) $("tab").value = previous;
+}
+async function refresh(dataUpdated = false) {
+  if (refreshing) { pendingRefresh = true; pendingData ||= dataUpdated; return; }
+  refreshing = true;
+  try {
+    const full = !state || dataUpdated;
+    const next = await send(full ? "DATA" : "STATE");
+    if (!initialized) {
+      if (next.preferences) { $("query").value = next.preferences.query || ""; $("pages").value = next.preferences.max_pages || 1; $("interval").value = next.preferences.interval_seconds || 3; $("scroll").checked = next.preferences.scroll !== false; $("raw").checked = next.preferences.raw !== false; $("enrich").checked = next.preferences.enrich !== false; }
+      if (next.suppliers[0]) expanded.add(next.suppliers[0].key);
+      initialized = true;
+    }
+    const dataChanged = full;
+    state = { ...state, ...next };
+    for (const [id, value] of [["supplier-count", state.supplier_count], ["count", state.count], ["unresolved-count", state.unresolved_count], ["missing-names", state.missing_names]]) $(id).textContent = value;
+    const running = state.run?.status === "running", paused = ["paused", "stopped"].includes(state.run?.status);
+    $("collect").disabled = running; $("pause").disabled = !running; $("resume").disabled = !paused; $("show-tab").disabled = !state.run;
+    $("enrich-all").disabled = running || !state.count; $("clear").disabled = running || !state.count; $("import").disabled = running;
+    $("reparse").disabled = running || !state.raw_count;
+    for (const id of ["export-json", "export-csv", "export-raw"]) $(id).disabled = !state.count;
+    $("badge").dataset.state = state.run?.status || "idle";
+    $("badge").textContent = running ? "Работаю" : paused ? "Пауза" : state.run?.status === "finished" ? "Завершено" : "Готов к сбору";
+    $("stage").textContent = stages[state.run?.stage] || "Задание не запущено";
+    $("status").textContent = state.run?.message || "Данные появятся после сбора или импорта JSON.";
+    const run = state.run;
+    const detailPhase = run?.phase === "details";
+    $("progress").value = !run ? 0 : run.status === "finished" ? 100 : detailPhase ? 100 * run.detail_index / Math.max(1, run.detail_total) : 100 * run.completed_pages / Math.max(1, run.max_pages);
+    $("progress-label").textContent = run ? `Страницы: ${run.completed_pages}/${run.max_pages}${detailPhase ? ` · Карточки: ${run.detail_index}/${run.detail_total}` : ""}${run.current_count ? ` · На текущей странице: ${run.current_count}` : ""}` : "";
+    $("warnings").replaceChildren(...state.warnings.map(warning => element("li", warning))); $("warnings").hidden = !state.warnings.length;
+    $("log").replaceChildren(...(run?.log?.slice().reverse() || []).map(entry => { const item = element("li"); const time = element("time", new Date(entry.at).toLocaleTimeString("ru-RU")); time.dateTime = entry.at; item.append(time, element("span", entry.message)); return item; }));
+    if (!run?.log?.length) $("log").append(element("li", "Работа ещё не запущена.", "muted"));
+    if (dataChanged) renderTable();
+  } finally { refreshing = false; if (pendingRefresh) { const full = pendingData; pendingRefresh = false; pendingData = false; void refresh(full).catch(error); } }
+}
+function options() { return { tab_id: Number($("tab").value) || undefined, max_pages: Number($("pages").value), interval_seconds: Number($("interval").value), query: $("query").value, scroll: $("scroll").checked, enrich: $("enrich").checked, raw: $("raw").checked }; }
+$("collect-form").addEventListener("submit", event => { event.preventDefault(); if (!$("tab").value) { error(new Error("Выберите открытую вкладку с выдачей.")); return; } void action(() => send("START", options())); });
+$("enrich-all").addEventListener("click", () => { void action(() => send("ENRICH", options())); });
+$("pause").addEventListener("click", () => { void action(() => send("PAUSE")); });
+$("resume").addEventListener("click", () => { void action(() => send("RESUME", { interval_seconds: Number($("interval").value) })); });
+$("show-tab").addEventListener("click", () => { void action(() => send("SHOW_TAB")); });
+$("refresh-tabs").addEventListener("click", () => { void action(refreshTabs); });
+for (const [id, format] of [["export-json", "json"], ["export-csv", "csv"], ["export-raw", "raw"]]) $(id).addEventListener("click", () => { void action(() => send("EXPORT", { format })); });
+$("filter").addEventListener("input", renderTable); $("source-filter").addEventListener("change", renderTable);
+$("import").addEventListener("click", () => $("import-file").click());
+$("import-file").addEventListener("change", () => { void action(async () => {
+  const file = $("import-file").files[0]; if (!file) return;
+  if (file.size > 30000000) throw new Error("Файл больше 30 МБ. Разделите его на несколько сборов.");
+  const data = JSON.parse(await file.text()); await send("IMPORT", { data }); $("import-file").value = "";
+}); });
+$("reparse").addEventListener("click", () => { void action(async () => { const cards = await send("RAW"); const products = SupplierCollectorEngine.reparse(cards); await send("IMPORT", { data: { products } }); }); });
+$("clear").addEventListener("click", () => { if (confirm("Удалить все товары, карточки и журнал? Сначала сохраните экспорт, если данные нужны.")) void action(() => send("CLEAR")); });
+chrome.storage.onChanged.addListener((changes, area) => { if (area === "local" && (changes.collection || changes.run)) void refresh(Boolean(changes.collection)).catch(error); });
+void action(async () => { await refreshTabs(); await refresh(); });

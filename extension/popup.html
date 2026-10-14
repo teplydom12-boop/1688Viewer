@@ -8,33 +8,37 @@
 </head>
 <body>
   <header>
-    <span class="brand-mark" aria-hidden="true">1688</span>
-    <div><h1>Сбор поставщиков</h1><p>Из выдачи — в один JSON</p></div>
-    <span class="version">0.1</span>
+    <span class="brand-mark" aria-hidden="true">SV</span>
+    <div><h1>Сбор поставщиков</h1><p>1688 · Alibaba · Made-in-China</p></div>
+    <span class="version">0.2</span>
   </header>
 
   <main>
-    <div class="intro">Откройте 1688 и выполните поиск по тексту или картинке. Сбор работает в открытой вкладке.</div>
+    <button id="dashboard" class="dashboard-link" type="button">Открыть таблицу поставщиков и журнал ↗</button>
+    <div class="intro">Выполните поиск на маркетплейсе. Сбор работает в открытой вкладке.</div>
     <form id="collect-form">
       <label for="query">Название поиска <span>необязательно</span></label>
       <input id="query" type="text" maxlength="300" placeholder="Например: термос, фото №1" autocomplete="off">
       <p class="hint">Без названия текстовый запрос берётся из выдачи. Для поиска по фото можно указать свою метку.</p>
       <div class="options-row">
         <div><label for="pages">Страниц за запуск</label><input id="pages" type="number" min="1" max="20" value="1" required></div>
-        <label class="checkbox"><input id="scroll" type="checkbox" checked><span>Догружать товары<br><small>Прокруткой страницы</small></span></label>
+        <div><label for="interval">Пауза, сек.</label><input id="interval" type="number" min="1" max="30" value="3" required></div>
       </div>
-      <div class="action-row"><button id="collect" class="primary" type="submit">Собрать выдачу</button><button id="stop" type="button" disabled>Остановить</button></div>
+      <label class="checkbox"><input id="scroll" type="checkbox" checked><span>Догружать выдачу прокруткой</span></label>
+      <label class="checkbox"><input id="enrich" type="checkbox" checked><span>Получать магазины из карточек товаров</span></label>
+      <label class="checkbox"><input id="raw" type="checkbox" checked><span>Сохранять исходные карточки</span></label>
+      <div class="action-row"><button id="collect" class="primary" type="submit">Собрать выдачу</button><button id="stop" type="button" disabled>Пауза</button><button id="resume" type="button" disabled>Продолжить</button></div>
     </form>
 
     <section class="collection" aria-label="Сохранённые данные">
-      <div class="stats"><div><strong id="count">0</strong><span>товаров</span></div><div><strong id="page-count">0</strong><span>страниц собрано</span></div><span id="badge">Готов к сбору</span></div>
+      <div class="stats"><div><strong id="count">0</strong><span>товаров</span></div><div><strong id="supplier-count">0</strong><span>поставщиков</span></div><div><strong id="page-count">0</strong><span>страниц</span></div><span id="badge">Готов к сбору</span></div>
       <p id="status" role="status" aria-live="polite">Результаты сохраняются между запусками.</p>
       <p id="error" class="error" role="alert" hidden></p>
       <ul id="warnings" class="warnings" hidden></ul>
       <ul id="preview" class="preview"></ul>
       <div class="export-row"><button id="export" type="button" disabled>Скачать JSON</button><button id="clear" class="quiet" type="button" disabled>Очистить</button></div>
     </section>
-    <p class="footer">Недоступные поля остаются пустыми. Проверку безопасности на 1688 нужно проходить вручную.</p>
+    <p class="footer">Недоступные поля остаются пустыми. При капче откройте рабочую вкладку из таблицы и пройдите проверку вручную.</p>
   </main>
   <script src="popup.js"></script>
 </body>

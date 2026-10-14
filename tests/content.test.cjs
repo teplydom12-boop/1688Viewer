@@ -20,6 +20,7 @@ async function pageFor(t, html = fixture, url = URL) {
     ? route.fulfill({ contentType: "text/html; charset=utf-8", body: html }) : route.abort());
   await page.goto(url);
   await page.addScriptTag({ path: path.join(__dirname, "../extension/shared.js") });
+  await page.addScriptTag({ path: path.join(__dirname, "../extension/engine.js") });
   await page.addScriptTag({ path: path.join(__dirname, "../extension/content.js") });
   return page;
 }
@@ -79,6 +80,11 @@ test("pagination recognises next and refuses disabled controls", async t => {
   assert.equal(await page.evaluate(() => SupplierCollectorDOM.nextPageElement()?.textContent), "下一页");
   await page.evaluate(() => document.querySelector(".next").setAttribute("aria-disabled", "true"));
   assert.equal(await page.evaluate(() => SupplierCollectorDOM.nextPageElement()), null);
+});
+
+test("rate-limit pages pause instead of issuing repeated page requests", async t => {
+  const page = await pageFor(t, '<h1>429 Too Many Requests</h1>');
+  await assert.rejects(page.evaluate(() => SupplierCollectorDOM.collect({ scroll: false })), /частоту запросов/);
 });
 
 test("scroll collection accumulates lazy and virtualised cards", async t => {

@@ -15,7 +15,7 @@ input:focus-visible, button:focus-visible { outline: 2px solid #eb5e21; outline-
 .hint { color: #8a8277; font-size: 11px; line-height: 1.45; margin: 7px 0 15px; }
 .options-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 17px; }
 .options-row input[type="number"] { width: 112px; }
-.checkbox { display: flex; gap: 9px; align-items: center; margin: 15px 0 0; font-weight: 500; line-height: 1.4; }
+.checkbox { display: flex; gap: 9px; align-items: center; margin: 10px 0; font-weight: 400; line-height: 1.4; }
 .checkbox input { width: 16px; height: 16px; accent-color: #eb5e21; }
 .checkbox small { color: #8a8277; font-size: 10px; font-weight: 400; }
 .action-row, .export-row { display: flex; gap: 9px; }
@@ -25,7 +25,7 @@ button:disabled { opacity: .45; cursor: default; }
 .primary { flex: 1; border-color: #eb5e21; color: #fff; background: #eb5e21; }
 .primary:hover:enabled { background: #d65018; }
 .collection { margin-top: 20px; padding-top: 18px; border-top: 1px solid #dfd9cf; }
-.stats { display: flex; align-items: center; gap: 24px; }
+.stats { display: flex; align-items: center; gap: 18px; }
 .stats strong { display: block; font-size: 27px; line-height: 1.15; font-weight: 650; font-variant-numeric: tabular-nums; }
 .stats span { font-size: 11px; color: #8a8277; }
 #badge { margin-left: auto; border: 1px solid #ddd7cc; padding: 5px 8px; border-radius: 20px; white-space: nowrap; }
@@ -41,3 +41,5 @@ button:disabled { opacity: .45; cursor: default; }
 #export { flex: 1; }
 .quiet { border-color: transparent; background: transparent; font-weight: 400; color: #8a8277; }
 .footer { color: #92897c; font-size: 10px; line-height: 1.5; margin: 13px 0 0; }
+.dashboard-link { width: 100%; margin-bottom: 13px; color: #b84c1d; font-size: 11px; }
+#resume { padding: 10px 8px; font-size: 11px; }

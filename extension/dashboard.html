@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Supplier Viewer — поставщики</title><link rel="stylesheet" href="dashboard.css"></head>
+<body>
+  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>1688 · Alibaba · Made-in-China</small></div></div><span class="local">Данные хранятся в вашем браузере</span><span class="version">0.2</span></header>
+  <main>
+    <aside>
+      <h2>Новый сбор</h2><p class="muted">Выполните поиск на маркетплейсе, затем выберите его вкладку.</p>
+      <form id="collect-form">
+        <label for="tab">Вкладка с выдачей</label><div class="tab-picker"><select id="tab" required><option value="">Загрузка вкладок…</option></select><button id="refresh-tabs" type="button" title="Обновить список вкладок">↻</button></div>
+        <label for="query">Метка поиска</label><input id="query" maxlength="300" placeholder="Запрос или «Фото №1»"><small class="hint">Необязательно. Текстовый запрос определяется автоматически.</small>
+        <div class="two-fields"><div><label for="pages">Страниц</label><input id="pages" type="number" min="1" max="20" value="1" required></div><div><label for="interval">Пауза, сек.</label><input id="interval" type="number" min="1" max="30" value="3" required></div></div>
+        <label class="check"><input id="scroll" type="checkbox" checked><span>Догружать выдачу прокруткой</span></label>
+        <label class="check"><input id="enrich" type="checkbox" checked><span>Получать данные магазинов<small>После выдачи открывать карточки по очереди</small></span></label>
+        <label class="check"><input id="raw" type="checkbox" checked><span>Сохранять исходные карточки<small>Для повторного анализа без нового сбора</small></span></label>
+        <button id="collect" class="primary wide" type="submit">Начать сбор</button>
+      </form>
+      <button id="enrich-all" class="wide" type="button">Проверить собранные карточки</button>
+      <p class="footnote">Одна рабочая вкладка, последовательная обработка и паузы между переходами. При капче работа приостанавливается.</p>
+      <div class="import-actions"><button id="import" type="button">Импорт JSON</button><button id="reparse" type="button">Переразобрать карточки</button><input id="import-file" type="file" accept=".json,application/json" hidden></div>
+      <button id="clear" class="danger wide" type="button">Очистить данные</button>
+    </aside>
+    <section class="workspace">
+      <div class="page-heading"><div><h1>Поставщики и их товары</h1><p class="muted">Группировка по идентификатору или ссылке магазина. Совпадение названий не объединяет компании.</p></div><div class="exports"><button id="export-csv">CSV для Excel</button><button id="export-json" class="primary">Скачать JSON</button><button id="export-raw">Сырой JSON</button></div></div>
+      <div class="stats"><div><strong id="supplier-count">0</strong><span>поставщиков определено</span></div><div><strong id="count">0</strong><span>товаров собрано</span></div><div><strong id="unresolved-count">0</strong><span>товаров без поставщика</span></div><div><strong id="missing-names">0</strong><span>товаров без имени магазина</span></div></div>
+      <section class="job" aria-label="Текущая работа"><div class="job-heading"><span id="badge">Готов к сбору</span><span id="stage">Задание не запущено</span><div class="job-buttons"><button id="show-tab" disabled>Рабочая вкладка</button><button id="pause" disabled>Пауза</button><button id="resume" disabled>Продолжить</button></div></div><p id="status" role="status" aria-live="polite">Данные появятся после сбора или импорта JSON.</p><progress id="progress" max="100" value="0"></progress><p id="progress-label" class="muted"></p><p id="error" role="alert" class="error" hidden></p><ul id="warnings" class="warnings" hidden></ul></section>
+      <div class="filter-row"><input id="filter" type="search" placeholder="Найти поставщика или товар" aria-label="Фильтр поставщиков и товаров"><select id="source-filter" aria-label="Маркетплейс"><option value="">Все площадки</option><option value="1688">1688</option><option value="alibaba">Alibaba</option><option value="made-in-china">Made-in-China</option></select><span id="filtered-count" class="muted"></span></div>
+      <div class="table-wrap"><table class="supplier-table"><thead><tr><th>Поставщик / товар</th><th>Площадка</th><th>Товаров</th><th>Магазин</th><th>Данные</th></tr></thead><tbody id="suppliers"></tbody></table><div id="empty" class="empty"><h3>Начните с одного поиска</h3><p>Выберите вкладку слева или импортируйте уже собранный JSON.<br>Здесь появятся поставщики, а под каждым — найденные товары.</p></div></div>
+      <section id="unresolved-section" class="unresolved" hidden><h2>Поставщик пока не определён</h2><p class="muted">Эти товары не объединяются в вымышленную компанию. Проверка карточек может заполнить недостающие поля.</p><div id="unresolved"></div></section>
+      <details class="activity" open><summary>Журнал действий</summary><ol id="log"><li class="muted">Работа ещё не запущена.</li></ol></details>
+    </section>
+  </main>
+  <script src="shared.js"></script><script src="engine.js"></script><script src="dashboard.js"></script>
+</body></html>

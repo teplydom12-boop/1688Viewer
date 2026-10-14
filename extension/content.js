@@ -3,21 +3,10 @@
   if (globalThis.__supplierCollectorInstalled) return;
   globalThis.__supplierCollectorInstalled = true;
   const S = globalThis.SupplierCollector;
+  const E = globalThis.SupplierCollectorEngine;
   let collecting = false;
   let cancelled = false;
-  const CARD_SELECTORS = [
-    ".space-offer-card-box", ".offer-card", ".offer-item", ".offer-list-row-offer",
-    ".offer-list-item", ".sm-offer", "[data-offer-id]", "[data-offerid]",
-    '[class*="offer-card"]', '[class*="offer-item"]', '[class*="search-offer"]'
-  ].join(",");
-  const TITLE_SELECTORS = [
-    '[class*="offer-title"]', '[class*="offerTitle"]', '[class*="product-title"]',
-    '[class*="title-text"]', ".title", 'h2', 'h3', '[itemprop="name"]'
-  ].join(",");
-  const SHOP_SELECTORS = [
-    ".company-name", ".shop-name", ".companyname", '[class*="company-name"]',
-    '[class*="companyName"]', '[class*="shopName"]', '[class*="supplier-name"]'
-  ].join(",");
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   function visible(element) {
     if (!element || !element.isConnected) return false;
@@ -25,214 +14,112 @@
     return style.display !== "none" && style.visibility !== "hidden" && element.getClientRects().length > 0;
   }
 
-  function getText(element) {
-    return element ? S.text(element.getAttribute("content") || element.innerText || element.textContent) : null;
-  }
-
-  function firstVisible(root, selector) {
-    return [...root.querySelectorAll(selector)].find(visible) || null;
-  }
-
-  function offerIds(root) {
-    return new Set([...root.querySelectorAll("a[href]")].map(anchor => S.productUrl(anchor.getAttribute("href"), location.href)?.id).filter(Boolean));
-  }
-
-  function cardFor(anchor, id) {
-    const selected = anchor.closest(CARD_SELECTORS);
-    if (selected && offerIds(selected).size <= 1) return selected;
-    let node = anchor;
-    let best = anchor;
-    for (let depth = 0; depth < 6 && node.parentElement; depth++) {
-      node = node.parentElement;
-      if (["BODY", "HTML", "MAIN"].includes(node.tagName)) break;
-      const ids = offerIds(node);
-      if (ids.size > 1 || (ids.size === 1 && !ids.has(id))) break;
-      if ((node.textContent || "").length > 1800) break;
-      best = node;
-      if (node.querySelector('[class*="price"]') && node.querySelector(SHOP_SELECTORS)) break;
-    }
-    return best;
-  }
-
-  function usefulTitle(value) {
-    const title = S.text(value);
-    if (!title || title.length < 2 || /^(查看详情|立即购买|点击查看|详情|购买|立即订购|查看商品)$/.test(title)) return null;
-    if (/^[¥￥\d\s.,~–\-/元件个]+$/.test(title)) return null;
-    return title.slice(0, 500);
-  }
-
-  function getTitle(card, anchor) {
-    for (const element of card.querySelectorAll(TITLE_SELECTORS)) {
-      if (!visible(element)) continue;
-      const title = usefulTitle(element.getAttribute("title")) || usefulTitle(getText(element));
-      if (title) return title;
-    }
-    return usefulTitle(anchor.getAttribute("title")) || usefulTitle(anchor.getAttribute("aria-label")) ||
-      usefulTitle(anchor.getAttribute("data-title")) || usefulTitle(anchor.querySelector("img")?.getAttribute("alt")) ||
-      (anchor.tagName === "A" ? usefulTitle(getText(anchor)) : null);
-  }
-
-  function getPrice(card) {
-    const selectors = ['[itemprop="price"]', ".offer-price", ".price", '[class*="offer-price"]', '[class*="price"]'];
-    for (const selector of selectors) {
-      for (const element of card.querySelectorAll(selector)) {
-        if (!visible(element) || /original|old-price|price-old|freight/i.test(element.className)) continue;
-        const price = getText(element)?.replace(/\s*\.\s*/g, ".");
-        if (price && /\d/.test(price) && price.length < 120) return price;
-      }
-    }
-    const raw = getText(card) || "";
-    return raw.match(/(?:¥|￥|人民币|RMB|CNY)\s*\d[\d,.]*(?:\s*(?:-|~|至|–)\s*(?:¥|￥)?\s*\d[\d,.]*)?/i)?.[0] ||
-      raw.match(/\d[\d,.]*\s*元(?:\s*\/\s*[^\s]{1,5})?/)?.[0] || null;
-  }
-
-  function getMinimumOrder(card) {
-    const element = firstVisible(card, '.moq, [class*="min-order"], [class*="minOrder"], [class*="start-order"]');
-    const value = getText(element);
-    if (value && /\d/.test(value)) return value;
-    const raw = getText(card) || "";
-    return raw.match(/(?:[≥>]\s*)?\d[\d,.]*\s*(?:件|个|套|箱|包|袋|双|台|瓶|只|千克|公斤|吨|米|码|kg|pcs)\s*(?:起批|起订|起购|起售)/i)?.[0] ||
-      raw.match(/(?:起批量|起订量|最小起订量|MOQ)\s*[:：]?\s*\d[\d,.]*\s*(?:件|个|套|箱|包|袋|双|台|瓶|只|千克|公斤|吨|米|码|kg|pcs)?/i)?.[0] || null;
-  }
-
-  function getImage(card, anchor) {
-    const image = anchor.querySelector("img") || firstVisible(card, '[class*="offer-img"] img, [class*="product-img"] img, img');
-    if (!image) return null;
-    for (const value of [image.getAttribute("data-src"), image.getAttribute("data-lazy-src"), image.getAttribute("data-original"), image.currentSrc, image.getAttribute("src")]) {
-      if (!value || /placeholder|transparent|loading\.gif|spacer/i.test(value)) continue;
-      const url = S.httpUrl(value, location.href);
-      if (url) return url;
-    }
-    return null;
-  }
-
   function blockedReason() {
-    if (/^(login|passport)\./.test(location.hostname) || /\/(?:login|punish|captcha|verify)(?:[/.?]|$)/i.test(location.pathname)) {
-      return "Откройте выдачу после входа и проверки безопасности 1688.";
-    }
-    const challenge = firstVisible(document, '#nc_1_wrapper, .nc-container, .baxia-dialog, [id*="captcha"], [class*="captcha"]');
-    const password = firstVisible(document, 'input[type="password"]');
-    if (challenge || password) return "1688 показывает вход или проверку безопасности. Пройдите её вручную и возобновите сбор.";
-    const body = getText(document.body) || "";
-    if (body.length < 1500 && /滑动验证|拖动滑块|安全验证|访问受限|请完成验证/.test(body)) {
-      return "1688 запросил проверку безопасности. Пройдите её вручную и возобновите сбор.";
-    }
+    if (/^(login|passport|accounts)\./.test(location.hostname) || /\/(?:login|punish|captcha|verify)(?:[/.?]|$)/i.test(location.pathname)) return "Откройте страницу после входа и проверки безопасности.";
+    const challenge = [...document.querySelectorAll('#nc_1_wrapper, .nc-container, [class*="baxia-dialog"], [id*="captcha"], [class*="captcha"], iframe[src*="punish"], iframe[src*="captcha"], input[type="password"]')].find(visible);
+    if (challenge) return "Сайт показывает вход или проверку безопасности. Пройдите её вручную и нажмите «Продолжить».";
+    const body = S.text(document.body?.innerText) || "";
+    if (body.length < 2000 && /too many requests|temporarily blocked|request limit|\b429\b|系统繁忙/i.test(body)) return "Сайт ограничил частоту запросов. Подождите, увеличьте паузу между переходами и продолжите работу.";
+    if (body.length < 2000 && /滑动验证|拖动滑块|安全验证|访问受限|请完成验证|verify you are human|access denied|unusual traffic|security verification/i.test(body)) return "Сайт запросил проверку безопасности. Пройдите её вручную и нажмите «Продолжить».";
     return null;
   }
 
-  function readPage(label) {
-    const error = blockedReason();
-    if (error) throw new Error(error);
-    const input = document.querySelector('input[name="keywords"], input[name="keyword"], input[name="q"], #alisearch-keywords');
-    const search = S.detectSearch(location.href, label, input?.value);
-    const timestamp = new Date().toISOString();
-    const records = [];
-    const candidates = [...document.querySelectorAll("a[href]")].map(anchor => ({
-      anchor, offer: S.productUrl(anchor.getAttribute("href"), location.href)
-    }));
-    // Some image-search cards use JS navigation instead of an ordinary product link.
-    for (const card of document.querySelectorAll("[data-offer-id], [data-offerid]")) {
-      const id = card.getAttribute("data-offer-id") || card.getAttribute("data-offerid");
-      if (/^\d+$/.test(id || "") && offerIds(card).size === 0) candidates.push({
-        anchor: card, offer: { id, url: `https://detail.1688.com/offer/${id}.html` }
-      });
-    }
-    for (const { anchor, offer } of candidates) {
-      if (!offer || !visible(anchor)) continue;
-      // Recommendations on a product detail page are not search results.
-      if (S.productUrl(location.href, location.href)) throw new Error("Откройте страницу поисковой выдачи, а не карточку товара.");
-      const card = cardFor(anchor, offer.id);
-      const shopElement = firstVisible(card, SHOP_SELECTORS);
-      const supplier = [...card.querySelectorAll("a[href]")].filter(visible)
-        .map(element => ({ element, url: S.supplierUrl(element.getAttribute("href"), location.href) }))
-        .find(item => item.url);
-      let shopName = getText(shopElement) || S.text(supplier?.element.getAttribute("title")) || getText(supplier?.element);
-      if (shopName && /^(进店|进入店铺|联系卖家|店铺|旺铺)$/.test(shopName)) shopName = null;
-      records.push({
-        source: "1688",
-        product_id: offer.id,
-        title: getTitle(card, anchor),
-        product_url: offer.url,
-        shop_name: shopName,
-        supplier_url: supplier?.url || null,
-        price: getPrice(card),
-        minimum_order: getMinimumOrder(card),
-        image_url: getImage(card, anchor),
-        query: search.query,
-        search_type: search.search_type,
-        collected_at: timestamp,
-        source_page_url: location.href
-      });
-    }
-    return S.mergeProducts([], records);
+  function check() {
+    if (cancelled) { const error = new Error("Сбор приостановлен."); error.code = "CANCELLED"; throw error; }
+    const reason = blockedReason();
+    if (reason) { const error = new Error(reason); error.code = /частоту запросов/.test(reason) ? "RATE_LIMIT" : "CHALLENGE"; throw error; }
   }
 
-  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-  function checkCancelled() {
-    if (cancelled) throw new Error("Сбор остановлен.");
+  function progress(stage, message, count) {
+    if (typeof chrome !== "undefined" && typeof chrome.runtime?.sendMessage === "function") {
+      void chrome.runtime.sendMessage({ target: "1688-background", type: "PROGRESS", detail: { stage, message, count } }).catch(() => {});
+    }
   }
 
-  async function waitForResults(label, previousFingerprint) {
+  function extract(label, mode = "search", raw = true) {
+    check();
+    if (mode === "search" && S.productUrl(location.href, location.href)) throw new Error("Откройте страницу поисковой выдачи, а не карточку товара.");
+    return E.extract(document, { url: location.href, label, mode, raw });
+  }
+  function readPage(label) { return extract(label).products; }
+
+  async function waitForResults(label, previousFingerprint, mode, raw) {
     const deadline = Date.now() + 15000;
     const previousIds = new Set((previousFingerprint || "").split(","));
     while (Date.now() < deadline) {
-      checkCancelled();
-      const products = readPage(label);
-      if (products.length && (!previousFingerprint || products.some(item => !previousIds.has(item.product_id)))) return products;
+      const result = extract(label, mode, raw);
+      if (result.products.length && (!previousFingerprint || result.products.some(item => !previousIds.has(`${item.source}:${item.product_id}`) && !previousIds.has(item.product_id)))) return result;
       await delay(400);
     }
-    throw new Error(previousFingerprint
-      ? "Выдача после перехода не изменилась. Сбор приостановлен; проверьте страницу."
-      : "Товары не найдены. Откройте выдачу 1688 и дождитесь загрузки. Возможно, для этой страницы нужны другие правила извлечения.");
+    throw new Error(previousFingerprint ? "Выдача после перехода не изменилась. Проверьте страницу и продолжите сбор." : "Товары не найдены. Дождитесь загрузки; для этой страницы могут понадобиться дополнительные правила извлечения.");
+  }
+
+  function pageResult(products, rawCards, diagnostics, query, warnings = []) {
+    if (products.some(item => !item.title)) warnings.push("У части товаров не найдено название.");
+    if (products.some(item => !item.shop_name)) warnings.push("В выдаче не показаны названия части магазинов. Используйте проверку карточек товаров.");
+    return { products, raw_cards: [...rawCards.values()], page: {
+      page_url: location.href, ...S.detectSearch(location.href, query, document.querySelector('input[name="keywords"], input[name="SearchText"]')?.value),
+      source: S.marketplace(location.href), collected_at: new Date().toISOString(), product_count: products.length,
+      fingerprint: S.fingerprint(products), diagnostics, warnings
+    } };
   }
 
   async function collect(options = {}) {
     if (collecting) throw new Error("Сбор этой страницы уже идёт.");
-    collecting = true;
-    cancelled = false;
+    collecting = true; cancelled = false;
+    let products = [];
+    const rawCards = new Map();
+    let diagnostics = {};
+    const absorb = result => {
+      products = S.mergeProducts(products, result.products); diagnostics = result.diagnostics;
+      for (const card of result.raw_cards) rawCards.set(card.product_id, card);
+    };
     try {
-      let products = await waitForResults(options.query, options.previousFingerprint);
-      let reachedBottom = false;
-      let stableAtBottom = 0;
-      let scrolls = 0;
+      progress("loading", "Ожидаю загрузку выдачи…", 0);
+      absorb(await waitForResults(options.query, options.previousFingerprint, "search", options.raw !== false));
+      let reachedBottom = false, stableAtBottom = 0;
       if (options.scroll) {
-        window.scrollTo(0, 0);
-        await delay(350);
-        products = S.mergeProducts(products, readPage(options.query));
-        for (; scrolls < 24; scrolls++) {
-          checkCancelled();
+        window.scrollTo(0, 0); await delay(350);
+        absorb(extract(options.query, "search", options.raw !== false));
+        for (let scrolls = 0; scrolls < 32; scrolls++) {
+          check();
+          progress("scrolling", `Догружаю выдачу: ${products.length} товаров, прокрутка ${scrolls + 1}.`, products.length);
           const before = products.length;
           window.scrollBy(0, Math.max(500, innerHeight * 0.85));
-          await delay(450);
-          products = S.mergeProducts(products, readPage(options.query));
-          reachedBottom = window.scrollY + innerHeight >= document.documentElement.scrollHeight - 12;
+          await delay(options.scroll_delay || 650);
+          absorb(extract(options.query, "search", options.raw !== false));
+          reachedBottom = scrollY + innerHeight >= document.documentElement.scrollHeight - 12;
           stableAtBottom = reachedBottom && products.length === before ? stableAtBottom + 1 : 0;
           if (stableAtBottom >= 3) break;
         }
       }
-      const warnings = [];
-      if (options.scroll && !reachedBottom) warnings.push("Достигнут предел прокрутки. Часть выдачи могла не загрузиться; прокрутите дальше и соберите ещё раз.");
-      if (products.some(item => !item.title)) warnings.push("У части товаров не найдено название; проверьте правила извлечения.");
-      if (products.every(item => !item.shop_name && !item.supplier_url)) warnings.push("Магазины не указаны в доступной разметке этой выдачи. Поля оставлены пустыми.");
-      return {
-        products,
-        page: {
-          page_url: location.href,
-          ...S.detectSearch(location.href, options.query, document.querySelector('input[name="keywords"]')?.value),
-          collected_at: new Date().toISOString(),
-          product_count: products.length,
-          fingerprint: S.fingerprint(products),
-          warnings
-        }
-      };
+      const warnings = options.scroll && !reachedBottom ? ["Достигнут предел прокрутки. Часть выдачи могла не загрузиться; соберите её вручную."] : [];
+      return pageResult(products, rawCards, diagnostics, options.query, warnings);
+    } catch (error) {
+      if (products.length) error.partial = pageResult(products, rawCards, diagnostics, options.query, ["Страница собрана частично: работа была прервана."]);
+      throw error;
     } finally { collecting = false; }
+  }
+
+  async function detail(options = {}) {
+    cancelled = false;
+    progress("detail", "Проверяю карточку товара и данные компании…", 0);
+    let result;
+    const deadline = Date.now() + (options.timeout || 8000);
+    do {
+      check();
+      result = E.extract(document, { url: location.href, label: options.query, mode: "detail", raw: false });
+      if (result.products.some(item => item.shop_name && item.supplier_url)) break;
+      await delay(500);
+    } while (Date.now() < deadline);
+    for (const item of result.products) item.detail_checked_at = new Date().toISOString();
+    return result;
   }
 
   function nextPageElement() {
     for (const element of document.querySelectorAll('a, button, [role="button"]')) {
       if (!visible(element) || element.disabled || element.getAttribute("aria-disabled") === "true" || /disabled/i.test(element.className)) continue;
-      const label = S.text(element.getAttribute("aria-label") || element.getAttribute("title") || getText(element)) || "";
+      const label = S.text(element.getAttribute("aria-label") || element.getAttribute("title") || element.textContent) || "";
       const namedNext = /^(?:下一页|下一頁|下页|next(?: page)?)[\s›»>]*$/i.test(label);
       const pagination = element.closest('[class*="pagination"], [class*="paging"], [class*="pager"], .fui-paging');
       const classNext = pagination && /(?:^|[\s_-])next(?:[\s_-]|$)/i.test(element.className);
@@ -240,7 +127,7 @@
       const href = element.getAttribute("href");
       if (href && !/^(?:javascript:|#)/i.test(href)) {
         const url = S.httpUrl(href, location.href);
-        if (!url || !S.isMarketplaceUrl(url) || S.productUrl(url, location.href) || /^(?:login|passport)\./.test(new URL(url).hostname)) continue;
+        if (!url || !S.isMarketplaceUrl(url) || S.marketplace(url) !== S.marketplace(location.href) || S.productUrl(url, location.href) || /^(?:login|passport|accounts)\./.test(new URL(url).hostname)) continue;
       }
       return element;
     }
@@ -248,24 +135,21 @@
   }
 
   function goNext() {
-    const error = blockedReason();
-    if (error) throw new Error(error);
+    check();
     const element = nextPageElement();
     if (!element) return { moved: false };
     setTimeout(() => { if (!cancelled) element.click(); }, 100);
     return { moved: true };
   }
 
-  if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
-    chrome.runtime.onMessage.addListener((message, sender, respond) => {
-      if (message?.target !== "1688-content") return;
-      if (message.type === "CANCEL") { cancelled = true; respond({ ok: true }); return; }
-      const operation = message.type === "COLLECT" ? () => collect(message.options) : message.type === "NEXT" ? goNext : null;
-      if (!operation) return;
-      Promise.resolve().then(operation).then(result => respond({ ok: true, result })).catch(error => respond({ ok: false, error: error.message }));
-      return true;
-    });
-  }
-  // Pure DOM entry points are also exercised by the browser test suite.
-  globalThis.SupplierCollectorDOM = { readPage, collect, nextPageElement, blockedReason };
+  if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) chrome.runtime.onMessage.addListener((message, sender, respond) => {
+    if (message?.target !== "1688-content") return;
+    if (message.type === "CANCEL") { cancelled = true; respond({ ok: true }); return; }
+    if (message.type === "RESET") { cancelled = false; respond({ ok: true, result: {} }); return; }
+    const operation = message.type === "COLLECT" ? () => collect(message.options) : message.type === "DETAIL" ? () => detail(message.options) : message.type === "NEXT" ? goNext : message.type === "PEEK" ? () => extract(message.options?.query, "search", false) : null;
+    if (!operation) return;
+    Promise.resolve().then(operation).then(result => respond({ ok: true, result })).catch(error => respond({ ok: false, error: error.message, code: error.code, partial: error.partial }));
+    return true;
+  });
+  globalThis.SupplierCollectorDOM = { readPage, collect, detail, nextPageElement, blockedReason };
 })();

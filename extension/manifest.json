@@ -1,20 +1,21 @@
 {
   "manifest_version": 3,
-  "name": "1688 Viewer — сбор поставщиков",
-  "version": "0.1.0",
-  "description": "Собирает товары из открытой выдачи 1688 и сохраняет общий JSON для сравнения поставщиков.",
-  "permissions": ["activeTab", "scripting", "storage", "downloads", "alarms"],
-  "host_permissions": ["https://*.1688.com/*", "https://1688.com/*"],
+  "name": "Supplier Viewer — поиск поставщиков",
+  "version": "0.2.0",
+  "description": "Выдача и поставщики 1688, Alibaba и Made-in-China: сбор, проверка карточек, дерево товаров и экспорт.",
+  "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage", "downloads", "alarms"],
+  "host_permissions": ["https://*.1688.com/*", "https://1688.com/*", "https://*.alibaba.com/*", "https://alibaba.com/*", "https://*.made-in-china.com/*", "https://made-in-china.com/*"],
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'none'; img-src 'self' data:; style-src 'self'" },
   "background": { "service_worker": "background.js" },
   "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
   "action": {
     "default_icon": { "16": "icons/16.png", "32": "icons/32.png" },
     "default_popup": "popup.html",
-    "default_title": "1688 Viewer"
+    "default_title": "Supplier Viewer"
   },
   "content_scripts": [{
-    "matches": ["https://*.1688.com/*", "https://1688.com/*"],
-    "js": ["shared.js", "content.js"],
+    "matches": ["https://*.1688.com/*", "https://1688.com/*", "https://*.alibaba.com/*", "https://alibaba.com/*", "https://*.made-in-china.com/*", "https://made-in-china.com/*"],
+    "js": ["shared.js", "engine.js", "content.js"],
     "run_at": "document_idle"
   }]
 }

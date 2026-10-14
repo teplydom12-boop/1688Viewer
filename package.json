@@ -1,8 +1,8 @@
 {
   "name": "1688-viewer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Chrome extension for collecting 1688 search results into a single JSON file",
+  "description": "Multi-marketplace supplier collection, enrichment and product tree Chrome extension",
   "scripts": {
     "test": "node --test --test-concurrency=1 tests/*.test.cjs",
     "test:extension": "node --test tests/native-extension.cjs",

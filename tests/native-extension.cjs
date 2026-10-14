@@ -78,7 +78,7 @@ test("native installed extension: pagination, persistent collection, JSON downlo
     }, response.result.download_id, { timeout: 10000 });
     const filename = await popup.evaluate(async id => (await chrome.downloads.search({ id }))[0].filename, response.result.download_id);
     const output = JSON.parse(fs.readFileSync(filename, "utf8"));
-    assert.equal(output.schema_version, 1);
+    assert.equal(output.schema_version, 2);
     assert.equal(output.total_products, 3);
     assert.equal(output.pages.length, 2);
     assert.equal(output.products.find(item => item.product_id === "1002").minimum_order, null);
