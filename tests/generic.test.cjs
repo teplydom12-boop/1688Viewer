@@ -8,7 +8,7 @@ before(async () => { browser = await chromium.launch({ executablePath: process.e
 after(async () => { await browser?.close(); });
 async function setup(t) {
   const page = await browser.newPage(); t.after(() => page.close()); await page.route("**/*", route => route.abort());
-  for (const name of ["shared.js", "navigation.js", "generic.js", "engine.js"]) await page.addScriptTag({ path: path.join(__dirname, "../extension", name) });
+  for (const name of ["shared.js", "navigation.js", "generic.js", "data-sources.js", "engine.js"]) await page.addScriptTag({ path: path.join(__dirname, "../extension", name) });
   return page;
 }
 function tiles(prefix = "x") { return '<section>' + [1, 2].map(id => `<div class="${prefix}-${id}"><a href="/items/cup-${id}?utm_source=test"><img src="https://cdn.example/cup-${id}.jpg" alt="Cup ${id}"></a><h3>Cup ${id}</h3><span class="${prefix}-amount">€ ${id}2.50</span></div>`).join("") + '</section>'; }

@@ -22,7 +22,9 @@ async function pageFor(t, html = fixture, url = URL) {
   await page.addScriptTag({ path: path.join(__dirname, "../extension/shared.js") });
   await page.addScriptTag({ path: path.join(__dirname, "../extension/navigation.js") });
   await page.addScriptTag({ path: path.join(__dirname, "../extension/generic.js") });
+  await page.addScriptTag({ path: path.join(__dirname, "../extension/data-sources.js") });
   await page.addScriptTag({ path: path.join(__dirname, "../extension/engine.js") });
+  await page.addScriptTag({ path: path.join(__dirname, "../extension/observer.js") });
   await page.addScriptTag({ path: path.join(__dirname, "../extension/content.js") });
   return page;
 }
@@ -106,4 +108,37 @@ test("scroll collection accumulates lazy and virtualised cards", async t => {
   const result = await page.evaluate(() => SupplierCollectorDOM.collect({ scroll: true }));
   assert.deepEqual(result.products.map(item => item.product_id), ["1001", "1002", "1004"]);
   assert.equal(result.page.product_count, 3);
+});
+test("mutation observation retains short-lived cards between ordinary polling intervals", async t => {
+  const page = await pageFor(t, fixture);
+  await page.evaluate(() => {
+    setTimeout(() => {
+      const card = document.createElement("article"); card.className = "offer-card";
+      card.innerHTML = '<a href="https://detail.1688.com/offer/9001.html">Transient cup</a><span class="price">¥10</span>';
+      document.querySelector("main").append(card); setTimeout(() => card.remove(), 180);
+    }, 80);
+  });
+  const result = await page.evaluate(() => SupplierCollectorDOM.collect({ scroll: false }));
+  assert.ok(result.products.some(item => item.product_id === "9001")); assert.ok(result.page.diagnostics.mutation_samples > 0);
+});
+test("an internal scroll container is scanned without relying on window scrolling", async t => {
+  const html = '<div id="viewport" style="height:200px;overflow-y:auto"><main>' + [1, 2].map(id => `<article class="offer-card"><a href="https://detail.1688.com/offer/${id}.html"><img src="https://cdn.example/${id}.jpg" alt="Cup ${id}"></a><h3>Cup ${id}</h3><p>¥10</p></article>`).join("") + '<div style="height:1200px"></div></main></div>';
+  const page = await pageFor(t, html);
+  await page.evaluate(() => {
+    let added = false; document.getElementById("viewport").addEventListener("scroll", () => {
+      if (added || document.getElementById("viewport").scrollTop < 150) return; added = true;
+      document.querySelector("main").insertAdjacentHTML("beforeend", '<article class="offer-card"><a href="https://detail.1688.com/offer/9002.html"><img src="https://cdn.example/cup.jpg" alt="Internal cup"></a><h3>Internal cup</h3><p>¥10</p></article>');
+    });
+  });
+  const result = await page.evaluate(() => SupplierCollectorDOM.collect({ scroll: true, scroll_delay: 150 }));
+  assert.ok(result.products.some(item => item.product_id === "9002"));
+});
+test("a product priced 429 and a reCAPTCHA privacy badge do not stop ordinary collection", async t => {
+  const page = await pageFor(t, '<article class="offer-card" data-offer-id="1"><a href="https://detail.1688.com/offer/1.html">Cup</a><p class="price">¥429</p></article>');
+  assert.equal(await page.evaluate(() => SupplierCollectorDOM.blockedReason()), null);
+  await page.route("https://www.google.com/recaptcha/api2/anchor", route => route.fulfill({ body: "Privacy badge", contentType: "text/html" }));
+  await page.evaluate(() => { const badge = document.createElement("div"); badge.className = "grecaptcha-badge"; badge.innerHTML = '<iframe src="https://www.google.com/recaptcha/api2/anchor"></iframe>'; document.body.append(badge); });
+  assert.equal(await page.evaluate(() => SupplierCollectorDOM.blockedReason()), null);
+  const result = await page.evaluate(() => SupplierCollectorDOM.collect({ scroll: false }));
+  assert.equal(result.products[0].price, "¥429");
 });

@@ -24,6 +24,7 @@ async function refresh() {
       $("interval").value = state.preferences.interval_seconds || 3;
       $("enrich").checked = state.preferences.enrich !== false;
       $("raw").checked = state.preferences.raw !== false;
+      $("responses").checked = state.preferences.observe_responses === true;
     }
     initialized = true;
   }
@@ -34,6 +35,7 @@ async function refresh() {
   $("collect").disabled = running;
   $("stop").disabled = !running;
   $("resume").disabled = !["paused", "stopped"].includes(state.run?.status);
+  $("show-tab").hidden = !state.run || state.run.status !== "paused";
   $("clear").disabled = running || !state.count;
   $("export").disabled = !state.count;
   $("badge").textContent = running ? "Идёт сбор" : state.run?.status === "paused" ? "Пауза" : "Готов к сбору";
@@ -70,10 +72,12 @@ $("collect-form").addEventListener("submit", event => {
     interval_seconds: Number($("interval").value),
     scroll: $("scroll").checked,
     enrich: $("enrich").checked,
-    raw: $("raw").checked
+    raw: $("raw").checked,
+    observe_responses: $("responses").checked
   }); });
 });
 $("stop").addEventListener("click", () => { void action(() => send("PAUSE")); });
+$("show-tab").addEventListener("click", () => { void action(() => send("SHOW_TAB")); });
 $("resume").addEventListener("click", () => { void action(() => send("RESUME", { interval_seconds: Number($("interval").value) })); });
 $("dashboard").addEventListener("click", () => { void action(() => send("OPEN_DASHBOARD")); });
 $("export").addEventListener("click", () => { void action(() => send("EXPORT")); });

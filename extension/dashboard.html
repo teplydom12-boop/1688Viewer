@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Supplier Viewer — поставщики</title><link rel="stylesheet" href="dashboard.css"></head>
 <body>
-  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>Карточки товаров на разных сайтах</small></div></div><span class="local">Данные хранятся в вашем браузере</span><span class="version">0.3</span></header>
+  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>Карточки товаров на разных сайтах</small></div></div><span class="local">Данные хранятся в вашем браузере</span><span class="version">0.4</span></header>
   <main>
     <aside>
       <h2>Новый сбор</h2><p class="muted">Откройте сайт с товарами и выберите его вкладку. Доступ к новому сайту разрешается отдельно.</p>
@@ -11,6 +11,7 @@
         <div class="two-fields"><div><label for="pages">Страниц</label><input id="pages" type="number" min="1" max="20" value="1" required></div><div><label for="interval">Пауза, сек.</label><input id="interval" type="number" min="1" max="30" value="3" required></div></div>
         <label class="check"><input id="scroll" type="checkbox" checked><span>Догружать выдачу прокруткой</span></label>
         <label class="check"><input id="enrich" type="checkbox" checked><span>Получать данные магазинов<small>После выдачи открывать карточки по очереди</small></span></label>
+        <label class="check"><input id="responses" type="checkbox"><span>Дополнять данные из ответов сайта<small>Опционально, без дополнительных запросов</small></span></label>
         <label class="check"><input id="raw" type="checkbox" checked><span>Сохранять исходные карточки<small>Для повторного анализа без нового сбора</small></span></label>
         <button id="collect" class="primary wide" type="submit">Начать сбор</button>
       </form>
@@ -31,5 +32,5 @@
       <details class="activity" open><summary>Журнал действий</summary><ol id="log"><li class="muted">Работа ещё не запущена.</li></ol></details>
     </section>
   </main>
-  <script src="shared.js"></script><script src="navigation.js"></script><script src="generic.js"></script><script src="engine.js"></script><script src="dashboard.js"></script>
+  <script src="shared.js"></script><script src="navigation.js"></script><script src="generic.js"></script><script src="data-sources.js"></script><script src="engine.js"></script><script src="dashboard.js"></script>
 </body></html>

@@ -60,3 +60,27 @@ test("a text-only div can be recognised without classes or accessibility attribu
   const result = await analyze(t, '<div>Следующая страница</div>');
   assert.equal(result.decision, "automatic"); assert.equal(result.chosen.label, "Следующая страница");
 });
+test("aria-labelledby resolves the accessible name of an icon-only control", async t => {
+  const result = await analyze(t, '<span id="next-name" hidden>Next page</span><button aria-labelledby="next-name"><svg></svg></button>');
+  assert.equal(result.decision, "automatic"); assert.equal(result.chosen.label, "Next page");
+});
+test("a chevron SVG inside a pager is a supported next-page signal", async t => {
+  const result = await analyze(t, '<nav class="pagination"><button><svg viewBox="0 0 24 24"><path d="M9 6 L15 12 L9 18"></path></svg></button></nav>');
+  assert.equal(result.decision, "automatic"); assert.ok(result.chosen.reasons.some(reason => /SVG/.test(reason)));
+});
+test("numeric GET pagination forms expose a checked next value", async t => {
+  const result = await analyze(t, '<form class="pagination" action="/catalog"><label for="page">Page</label><input id="page" name="page" type="number" value="2" max="3"><button type="submit">Go</button></form>');
+  assert.equal(result.decision, "automatic"); assert.equal(result.chosen.action, "form-page"); assert.equal(result.chosen.next_value, "3");
+});
+test("select pagination at its final option is terminal", async t => {
+  const result = await analyze(t, '<form class="pagination"><select name="page"><option value="1">1</option><option value="2" selected>2</option></select></form>');
+  assert.equal(result.decision, "exhausted");
+});
+test("an exact window.open literal exposes its destination without running JavaScript", async t => {
+  const result = await analyze(t, '<button aria-label="Next page" onclick="window.open(\'?page=2\', \'_blank\')">Next</button>');
+  assert.equal(result.chosen.target_blank, true); assert.match(result.chosen.href, /page=2$/);
+});
+test("a saved numeric control cannot force navigation back to an old page", async t => {
+  const result = await analyze(t, '<nav class="pagination"><a id="old" href="?page=2">2</a><a href="?page=4">4</a></nav>', "https://catalog.example/catalog?page=3", { selector: "#old", label: "2" });
+  assert.equal(result.decision, "automatic"); assert.equal(result.chosen.label, "4");
+});

@@ -134,7 +134,7 @@
             records.push({ offer, fields: {
               title: S.text(value.name || value.title || value.subject || value.productName),
               price,
-              minimum_order: value.minimumOrderQuantity != null ? String(value.minimumOrderQuantity) : null,
+              minimum_order: S.quantity(value.minimumOrderQuantity),
               shop_name: S.text(sellerObject.name || sellerObject.legalName || value.companyName || value.shopName),
               supplier_id: ["string", "number"].includes(typeof sellerId) ? S.text(String(sellerId)) : null,
               supplier_url: S.supplierUrl(sellerObject.url || value.companyUrl || value.shopUrl, url, generic),
@@ -149,13 +149,14 @@
   }
 
   function sanitizedCard(card, url) {
+    if (S.webUrl(card.ownerDocument.URL)) url = card.ownerDocument.URL;
     const clone = card.cloneNode(true);
     const rememberedImage = root.SupplierGeneric?.image(card, url);
     if (rememberedImage) clone.setAttribute("data-image-url", rememberedImage);
     clone.querySelectorAll("script, style, iframe, svg, form, input, textarea, button").forEach(node => node.remove());
     for (const node of [clone, ...clone.querySelectorAll("*")]) {
       for (const attribute of [...node.attributes]) {
-        if (!["class", "title", "alt", "href", "src", "data-src", "data-original", "data-image-url", "data-sku", "data-renderkey", "data-offer-id", "data-offerid", "data-product-id", "data-snapshot-anchor", "itemprop", "itemtype", "itemscope", "content"].includes(attribute.name)) node.removeAttribute(attribute.name);
+        if (!["class", "title", "alt", "href", "src", "data-src", "data-original", "data-image-url", "data-sku", "data-renderkey", "data-offer-id", "data-offerid", "data-product-id", "data-snapshot-anchor", "itemprop", "itemtype", "itemscope", "itemid", "property", "typeof", "resource", "about", "role", "aria-label", "aria-labelledby", "id", "content"].includes(attribute.name)) node.removeAttribute(attribute.name);
         else if (["href", "src", "data-src", "data-original"].includes(attribute.name)) {
           let safe = S.httpUrl(attribute.value, url);
           if (safe && attribute.name === "href") {
@@ -185,15 +186,17 @@
     const timestamp = new Date().toISOString();
     const candidates = [];
     const scopes = root.SupplierNavigator ? root.SupplierNavigator.scopes(doc) : [doc];
-    const structured = scopes.flatMap(scope => structuredRecords(scope, url, mode));
+    const additions = root.SupplierDataSources?.extract(doc, { ...options, mode }) || { records: [], pagination: [] };
+    const structured = scopes.flatMap(scope => structuredRecords(scope, S.webUrl(scope.URL || scope.ownerDocument?.URL) ? scope.URL || scope.ownerDocument.URL : url, mode));
     for (const record of structured) candidates.push({ ...record, method: "structured-data", confidence: 100 });
+    candidates.push(...additions.records);
     if (mode === "detail") {
       const offer = S.productUrl(url, url, generic);
       if (!offer) throw new Error("Это не распознанная карточка товара.");
       const primary = generic ? doc.querySelector('[itemtype*="Product"],main') || doc.body : doc.body;
       const fields = generic ? root.SupplierGeneric.fields(primary, url, profile.fields) : domFields(doc.body, doc.body, url, snapshot);
       fields.title = S.text(doc.querySelector('meta[property="og:title"]')?.getAttribute("content")) || usefulName(text(doc.querySelector("h1"))) || fields.title;
-      if (generic && !structured.length && (!fields.title || !fields.price && !fields.image_url)) throw new Error("Не удалось подтвердить, что открытая страница содержит карточку товара.");
+      if (generic && !structured.length && !additions.records.length && (!fields.title || !fields.price && !fields.image_url)) throw new Error("Не удалось подтвердить, что открытая страница содержит карточку товара.");
       candidates.push({ offer, fields, method: "detail-dom", confidence: 75 });
     } else {
       for (const node of scopes.flatMap(scope => [...scope.querySelectorAll("[data-renderkey], [data-offer-id], [data-offerid], [data-product-id]")])) {
@@ -216,7 +219,7 @@
     for (const candidate of candidates) {
       if (!generic && candidate.offer.url && S.marketplace(candidate.offer.url) !== source) continue;
       if (mode === "detail" && candidate.offer.id !== currentOffer.id) continue;
-      const inferred = ["learned-card", "semantic-card", "repeated-card-structure"].includes(candidate.method);
+      const inferred = ["learned-card", "semantic-card", "repeated-card-structure", "linked-card-cluster", "visual-card-layout", "microdata", "rdfa", "microformats"].includes(candidate.method);
       const card = candidate.anchor ? inferred ? candidate.anchor : cardFor(candidate.anchor, candidate.offer, url) : null;
       const fields = candidate.fields || domFields(card, candidate.anchor, url, snapshot);
       const metadata = card && source === "1688" ? renderKey(card) : null;
@@ -226,20 +229,45 @@
         shop_name: fields.shop_name || null, supplier_url: fields.supplier_url || null,
         supplier_id: fields.supplier_id || candidate.supplier_id || metadata?.supplier_id || null,
         image_url: fields.image_url || null, ...search, collected_at: timestamp, source_page_url: url,
-        identity_type: candidate.offer.identity_type || (generic ? "url" : "marketplace-id"), native_id: candidate.offer.native_id || null,
+        identity_type: candidate.offer.identity_type || (generic ? "url" : "marketplace-id"), native_id: candidate.offer.native_id || card?.getAttribute("data-product-id") || card?.getAttribute("data-sku") || null,
         extraction_confidence: candidate.confidence || 85, field_sources: {}, field_confidence: {}
       };
       for (const [field, value] of Object.entries(record)) if (value && ["title", "price", "minimum_order", "shop_name", "supplier_url", "supplier_id", "image_url"].includes(field)) { record.field_sources[field] = candidate.method; record.field_confidence[field] = candidate.confidence || 85; }
       records.push(record);
+      const rawKey = `${record.source}:${record.product_id}`;
       if (raw && card) {
         const html = sanitizedCard(card, url);
-        const old = rawCards.get(record.product_id);
-        if (html && (!old || html.length > old.html.length)) rawCards.set(record.product_id, { product_id: record.product_id, source, source_page_url: url, collected_at: timestamp, html });
+        const old = rawCards.get(rawKey);
+        if (html && (!old || html.length > old.html.length)) rawCards.set(rawKey, { product_id: record.product_id, source: record.source, source_page_url: url, collected_at: timestamp, html });
+      } else if (raw && !rawCards.has(rawKey)) {
+        rawCards.set(rawKey, { product_id: record.product_id, source: record.source, source_page_url: url, collected_at: timestamp, html: "", record });
       }
     }
+    const aliases = new Map();
+    for (const record of records) if (record.product_url && record.native_id) {
+      const key = `${record.source}:${record.native_id}`; if (!aliases.has(key)) aliases.set(key, new Map()); aliases.get(key).set(record.product_url, record);
+    }
+    for (const record of records) if (!record.product_url && record.native_id) {
+      const matches = aliases.get(`${record.source}:${record.native_id}`); if (matches?.size !== 1) continue;
+      const found = [...matches.values()][0], originalKey = `${record.source}:${record.product_id}`;
+      record.product_id = found.product_id; record.product_url = found.product_url; record.identity_type = found.identity_type;
+      const raw = rawCards.get(originalKey); if (raw) { rawCards.delete(originalKey); const key = `${record.source}:${record.product_id}`, existing = rawCards.get(key); rawCards.set(key, { ...(existing || raw), product_id: record.product_id, record }); }
+    }
     const products = S.mergeProducts([], records);
+    const conflicting = [];
+    for (const product of products) {
+      const prices = records.filter(record => record.source === product.source && record.product_id === product.product_id && record.price).map(record => ({ value: record.price, method: record.field_sources.price }));
+      const amount = value => value.replace(/US\s*\$|USD|EUR|GBP|RUB|CNY|RMB|INR|[$€£¥￥₹₽]|руб\.?|\s/gi, "").replace(/(\.\d*?[1-9])0+$|\.0+$/g, "$1");
+      const currencies = prices.map(price => price.value.match(/\b(?:USD|EUR|GBP|RUB|CNY|INR|JPY)\b/i)?.[0]?.toUpperCase()).filter(Boolean);
+      if (new Set(prices.map(price => amount(price.value))).size > 1 || new Set(currencies).size > 1) {
+        product.data_conflicts = [{ field: "price", observations: [...new Map(prices.map(price => [price.method + price.value, price])).values()].slice(0, 8) }];
+        conflicting.push(product.product_id);
+      }
+    }
     return { products, raw_cards: [...rawCards.values()], diagnostics: {
-      engine_version: "0.3.0", source, methods: [...new Set(candidates.map(item => item.method))],
+      engine_version: "0.4.0", source, methods: [...new Set(candidates.map(item => item.method))],
+      data_truncated: Boolean(additions.truncated), pagination: additions.pagination,
+      price_conflicts: conflicting.length,
       inferred_cards: products.filter(item => item.extraction_confidence < 90).length, no_detail_links: products.filter(item => !item.product_url).length,
       missing_supplier_names: products.filter(item => !item.shop_name).length,
       missing_supplier_identity: products.filter(item => !item.supplier_id && !item.supplier_url).length
@@ -250,7 +278,8 @@
     let products = [];
     for (const card of cards) {
       if (!S.webUrl(card.source_page_url) || typeof card.html !== "string" || card.html.length > 20000) continue;
-      products = S.mergeProducts(products, fromHTML(card.html, { url: card.source_page_url, raw: false, profile: { card_selector: "body > *" } }).products);
+      if (card.html) products = S.mergeProducts(products, fromHTML(card.html, { url: card.source_page_url, raw: false, profile: { card_selector: "body > *" } }).products);
+      if (card.record) try { products = S.mergeProducts(products, S.importProducts({ products: [card.record] }).filter(item => item.product_id === card.product_id && item.source === card.source)); } catch { /* malformed imported business record */ }
     }
     return products;
   }

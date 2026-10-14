@@ -7,15 +7,16 @@
   const words = /\p{L}/u;
   const nonTitle = /^(?:add to cart|buy now|view details|wishlist|купить|в корзину|подробнее|цена|price|sold by|seller|supplier|поставщик|магазин)/i;
   function query(node, selector) { try { for (const scope of root.SupplierNavigator.scopes(node)) { const found = selector ? scope.querySelector(selector) : null; if (found) return found; } } catch { /* invalid learned selector */ } return null; }
-  const value = node => S.text(node?.getAttribute("content") || node?.getAttribute("data-price") || node?.textContent);
+  const value = node => S.text(node?.getAttribute("content") || node?.getAttribute("data-price") || node?.textContent || (node && root.SupplierNavigator.accessibleName(node)));
   function nodes(node, selector) { return [...new Set([...(node.matches?.(selector) ? [node] : []), ...root.SupplierNavigator.scopes(node).flatMap(scope => [...scope.querySelectorAll(selector)])])]; }
   function image(card, url, profile = {}) {
     const remembered = S.httpUrl(card.getAttribute("data-image-url"), url); if (remembered) return remembered;
     const selected = query(card, profile.image);
-    const images = selected ? [selected] : nodes(card, 'img, [itemprop="image"]');
+    const images = selected ? [selected] : nodes(card, 'img, [itemprop="image"], [property$=":image"], [role="img"]');
     for (const node of images) {
       if (/icon|logo|star|badge/i.test(node.getAttribute("class") || "")) continue;
-      for (const raw of [node.getAttribute("data-src"), node.getAttribute("data-lazy-src"), node.getAttribute("data-original"), node.currentSrc, node.getAttribute("src"), node.getAttribute("content")]) {
+      const responsive = (node.getAttribute("srcset") || node.getAttribute("data-srcset") || "").split(",").map(item => item.trim().split(/\s+/)).sort((a, b) => parseFloat(b[1] || "0") - parseFloat(a[1] || "0"))[0]?.[0];
+      for (const raw of [node.getAttribute("data-src"), node.getAttribute("data-lazy-src"), node.getAttribute("data-original"), node.currentSrc, node.getAttribute("src"), node.getAttribute("content"), responsive]) {
         if (!raw || /placeholder|spacer|loading\.gif/i.test(raw)) continue;
         const safe = S.httpUrl(raw, url); if (safe) return safe;
       }
@@ -29,8 +30,9 @@
   function title(card, profile = {}) {
     const selected = query(card, profile.title);
     if (selected) return value(selected)?.slice(0, 500) || null;
-    for (const node of nodes(card, '[itemprop="name"], h1,h2,h3,h4,[data-title],a[title]')) {
-      const text = S.text(node.getAttribute("title") || node.getAttribute("data-title")) || value(node);
+    for (const node of nodes(card, '[itemprop="name"], [role="heading"], h1,h2,h3,h4,[data-title],a[title],a[aria-label],a[aria-labelledby]')) {
+      if (node.closest('[itemprop="seller"],[itemprop="brand"],[typeof*="Organization"]')) continue;
+      const text = S.text(node.getAttribute("title") || node.getAttribute("data-title")) || root.SupplierNavigator.accessibleName(node) || value(node);
       if (text && words.test(text) && text.length <= 500 && !nonTitle.test(text)) return text;
     }
     const alt = nodes(card, "img[alt]").map(node => S.text(node.alt)).find(text => text && words.test(text) && !/^(?:image|photo|product image|изображение|фото)$/i.test(text));
@@ -96,6 +98,11 @@
       minimum_order: minimumOrder, shop_name: shopName?.slice(0, 500) || null, supplier_url: sellerUrl || null };
   }
   function identity(card, url, profile = {}) {
+    if (card.matches('[itemtype*="Product"],[typeof*="Product"]')) {
+      const declared = card.getAttribute("itemid") || card.getAttribute("about");
+      const explicit = declared && S.productUrl(declared, url, true);
+      if (explicit && !S.dangerousUrl(explicit.url)) return { ...explicit, identity_type: S.productUrl(explicit.url) ? "marketplace-id" : "url" };
+    }
     const metadataId = card.getAttribute("data-offer-id") || card.getAttribute("data-offerid") || (card.getAttribute("data-renderkey") || "").match(/_(\d{6,})$/)?.[1];
     if (S.marketplace(url) === "1688" && /^\d+$/.test(metadataId || "")) return { id: metadataId, url: `https://detail.1688.com/offer/${metadataId}.html`, identity_type: "marketplace-id" };
     const href = link(card, url, profile);
@@ -112,9 +119,10 @@
     const add = (card, method, confidence) => {
       if (seen.has(card) || !root.SupplierNavigator.visible(card, snapshot) || (card.textContent || "").length > 6500 || card.closest("header,footer,form")) return;
       seen.add(card);
-      const data = fields(card, url, profile.fields);
+      const base = S.webUrl(card.ownerDocument.URL) ? card.ownerDocument.URL : url;
+      const data = fields(card, base, profile.fields);
       if (!data.title) return;
-      const offer = identity(card, url, profile.fields); if (!offer) return;
+      const offer = identity(card, base, profile.fields); if (!offer) return;
       if (method === "repeated-card-structure" && !data.price && !S.productUrl(offer.url)) return;
       const strongLinks = new Set(nodes(card, 'a[href]').map(node => S.productUrl(node.getAttribute("href"), url)?.url).filter(Boolean));
       if (strongLinks.size > 1) return;
@@ -136,11 +144,39 @@
           const priced = group.filter(node => price(node)).length;
           if (priced < 2 || priced < group.length / 2) continue;
           for (const card of group) {
-            if (!image(card, url) && !query(card, '[itemprop="name"], [itemtype*="Product"]')) continue;
+            if (!image(card, url) && !query(card, 'img,[role="img"],[itemprop="name"], [itemtype*="Product"]')) continue;
             add(card, "repeated-card-structure", 80);
           }
         }
       }
+    }
+    // Find complete cards around links even when extra wrappers separate siblings.
+    const linked = [];
+    const productPath = href => /\/(?:products?|items?|p|dp|goods|sku)(?:\/|[-_])/i.test(new URL(href).pathname);
+    for (const scope of roots) for (const seed of [...scope.querySelectorAll('a[href], [data-snapshot-anchor][href]')].slice(0, 1000)) {
+      const base = S.webUrl(seed.ownerDocument.URL) ? seed.ownerDocument.URL : url;
+      const href = S.httpUrl(seed.getAttribute("href"), base);
+      if (!href || S.dangerousUrl(href) || S.canonicalUrl(href) === S.canonicalUrl(base) || seed.closest("header,footer,form,nav")) continue;
+      let chosen = null;
+      for (let card = seed, depth = 0; card && depth < 6; card = card.parentElement, depth++) {
+        if (["BODY", "HTML", "MAIN"].includes(card.tagName) || seen.has(card) || (card.textContent || "").length > 6500) break;
+        const urls = new Set(nodes(card, 'a[href], [data-snapshot-anchor][href]').filter(anchor => query(anchor, "img") || S.productUrl(anchor.getAttribute("href"), base)).map(anchor => S.canonicalUrl(anchor.getAttribute("href"), base)).filter(Boolean));
+        if (urls.size > 1) break;
+        const data = fields(card, base);
+        if (data.title && query(card, 'img,[role="img"]') && (data.price || productPath(href) && query(card, 'h1,h2,h3,h4,[role="heading"]'))) {
+          chosen = card; if (data.price) break;
+        }
+      }
+      if (chosen && !linked.includes(chosen)) linked.push(chosen);
+    }
+    const shape = node => `${nodes(node, 'img,[role="img"]').length}:${nodes(node, 'h1,h2,h3,h4,[role="heading"]').length}:${nodes(node, 'a[href],[data-snapshot-anchor][href]').length}`;
+    const shapes = new Map(linked.map(card => [card, shape(card)]));
+    for (const card of linked) {
+      const rect = card.getBoundingClientRect();
+      const peers = linked.filter(other => other !== card && shapes.get(other) === shapes.get(card));
+      if (!peers.length) continue;
+      const aligned = !snapshot && rect.width > 80 && peers.some(other => { const next = other.getBoundingClientRect(); return next.width / rect.width > 0.65 && next.width / rect.width < 1.55 && (Math.abs(rect.left - next.left) < 20 || Math.abs(rect.top - next.top) < 20); });
+      add(card, aligned ? "visual-card-layout" : "linked-card-cluster", aligned ? 82 : 78);
     }
     const ordered = candidates.sort((a, b) => b.confidence - a.confidence || Number(Boolean(b.offer.url)) - Number(Boolean(a.offer.url)) || (b.anchor.textContent || "").length - (a.anchor.textContent || "").length);
     const selected = [];

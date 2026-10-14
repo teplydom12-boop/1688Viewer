@@ -9,7 +9,7 @@ async function send(type, options) { const response = await chrome.runtime.sendM
 function error(error) { $("error").textContent = error?.message || String(error); $("error").hidden = false; }
 async function action(operation) { $("error").hidden = true; try { await operation(); await refresh(true); } catch (e) { error(e); } }
 function element(tag, content, className) { const node = document.createElement(tag); if (content != null) node.textContent = content; if (className) node.className = className; return node; }
-function safeLink(url, label) { const node = element("a", label); if (S.webUrl(url)) node.href = url; else node.textContent = "Ссылка недоступна"; node.target = "_blank"; node.rel = "noopener noreferrer"; return node; }
+function safeLink(url, label) { if (!S.webUrl(url)) { const node = element("span", label === "Открыть ↗" ? "Нет ссылки" : label, "muted"); node.title = "Ссылка недоступна"; return node; } const node = element("a", label); node.href = url; node.target = "_blank"; node.rel = "noopener noreferrer"; return node; }
 function productTable(products) {
   const table = element("table", null, "product-tree");
   const head = element("thead"); const row = element("tr"); ["Товар", "Цена", "Минимальный заказ", "Карточка"].forEach(label => row.append(element("th", label))); head.append(row);
@@ -18,7 +18,7 @@ function productTable(products) {
     const row = element("tr"); const title = element("td", product.title || "Название не получено", "title-cell");
     title.append(element("small", `ID: ${product.product_id}${product.query ? " · " + product.query : ""}`));
     if (product.extraction_confidence) title.append(element("small", `Оценка извлечения: ${product.extraction_confidence}/100 · ${product.identity_type === "card-fingerprint" ? "без официального ID" : product.identity_type || "ID товара"}`, "confidence"));
-    const price = element("td", product.price || "—"); const moq = element("td", product.minimum_order || "—");
+    const price = element("td", product.price || "—"); if (product.data_conflicts?.length) { price.append(element("small", "Источники расходятся", "confidence")); price.title = product.data_conflicts.flatMap(conflict => conflict.observations.map(item => `${item.value} (${item.method})`)).join("; "); } const moq = element("td", product.minimum_order || "—");
     const link = element("td"); link.append(safeLink(product.product_url, "Открыть ↗"));
     row.append(title, price, moq, link); body.append(row);
   }
@@ -76,7 +76,7 @@ async function refresh(dataUpdated = false) {
     const full = !state || dataUpdated;
     const next = await send(full ? "DATA" : "STATE");
     if (!initialized) {
-      if (next.preferences) { $("query").value = next.preferences.query || ""; $("pages").value = next.preferences.max_pages || 1; $("interval").value = next.preferences.interval_seconds || 3; $("scroll").checked = next.preferences.scroll !== false; $("raw").checked = next.preferences.raw !== false; $("enrich").checked = next.preferences.enrich !== false; }
+      if (next.preferences) { $("query").value = next.preferences.query || ""; $("pages").value = next.preferences.max_pages || 1; $("interval").value = next.preferences.interval_seconds || 3; $("scroll").checked = next.preferences.scroll !== false; $("raw").checked = next.preferences.raw !== false; $("responses").checked = next.preferences.observe_responses === true; $("enrich").checked = next.preferences.enrich !== false; }
       if (next.suppliers[0]) expanded.add(next.suppliers[0].key);
       initialized = true;
     }
@@ -114,7 +114,7 @@ async function refresh(dataUpdated = false) {
     renderNavigation();
   } finally { refreshing = false; if (pendingRefresh) { const full = pendingData; pendingRefresh = false; pendingData = false; void refresh(full).catch(error); } }
 }
-function options() { return { tab_id: Number($("tab").value) || undefined, max_pages: Number($("pages").value), interval_seconds: Number($("interval").value), query: $("query").value, scroll: $("scroll").checked, enrich: $("enrich").checked, raw: $("raw").checked }; }
+function options() { return { tab_id: Number($("tab").value) || undefined, max_pages: Number($("pages").value), interval_seconds: Number($("interval").value), query: $("query").value, scroll: $("scroll").checked, enrich: $("enrich").checked, raw: $("raw").checked, observe_responses: $("responses").checked }; }
 $("collect-form").addEventListener("submit", event => { event.preventDefault(); const access = authorizeSelected(); void action(async () => { await access; await send("START", options()); }); });
 $("enrich-all").addEventListener("click", () => { void action(() => send("ENRICH", options())); });
 $("pause").addEventListener("click", () => { void action(() => send("PAUSE")); });

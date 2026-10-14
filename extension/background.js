@@ -1,7 +1,10 @@
 "use strict";
 importScripts("shared.js");
+importScripts("page-data.js");
 const S = globalThis.SupplierCollector;
 const ALARM = "1688-collector-progress";
+const RESPONSE_SCRIPT = "supplier-observed-responses";
+const RESPONSE_BOOTSTRAP = "supplier-observed-response-permission";
 let processing = false, starting = false, stateQueue = Promise.resolve();
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const emptyCollection = () => ({ products: [], pages: [], raw_cards: [] });
@@ -31,7 +34,7 @@ async function sendToTab(tabId, type, options) {
   try { response = await chrome.tabs.sendMessage(tabId, message); }
   catch (error) {
     if (!/receiving end|establish connection/i.test(error.message)) throw error;
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["shared.js", "navigation.js", "generic.js", "engine.js", "content.js"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["shared.js", "navigation.js", "generic.js", "data-sources.js", "engine.js", "observer.js", "content.js"] });
     response = await chrome.tabs.sendMessage(tabId, message);
   }
   if (!response?.ok) { const error = new Error(response?.error || "Страница не ответила. Обновите её и повторите сбор."); error.code = response?.code; error.partial = response?.partial; throw error; }
@@ -45,16 +48,47 @@ async function ensureAccess(url) {
   if (!S.webUrl(url)) throw new Error("Откройте обычный сайт HTTP или HTTPS.");
   if (!await hasAccess(url)) { const error = new Error(`Разрешите расширению доступ к сайту ${new URL(url).hostname}.`); error.code = "ACCESS"; error.required_origin = S.originPattern(url); throw error; }
 }
+async function registerResponseScripts(url) {
+    const matches = S.isMarketplaceUrl(url) ? ["https://*.1688.com/*", "https://*.alibaba.com/*", "https://*.made-in-china.com/*"] : [S.originPattern(url)];
+    if (chrome.scripting.registerContentScripts) {
+      const scripts = await chrome.scripting.getRegisteredContentScripts({ ids: [RESPONSE_SCRIPT, RESPONSE_BOOTSTRAP] });
+      const spec = { id: RESPONSE_SCRIPT, matches, js: ["page-data.js", "response-observer.js"], world: "MAIN", runAt: "document_start", persistAcrossSessions: false };
+      const bootstrap = { id: RESPONSE_BOOTSTRAP, matches, js: ["response-bootstrap.js"], world: "ISOLATED", runAt: "document_start", persistAcrossSessions: false };
+      for (const script of [spec, bootstrap]) { if (scripts.some(item => item.id === script.id)) await chrome.scripting.updateContentScripts([script]); else await chrome.scripting.registerContentScripts([script]); }
+    }
+}
+async function responseObservation(tabId, enabled, install = false) {
+  if (tabId == null) return;
+  const tab = await chrome.tabs.get(tabId); await ensureAccess(tab.url);
+  const { run } = await chrome.storage.local.get("run");
+  if (install) { await registerResponseScripts(tab.url); await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", files: ["page-data.js", "response-observer.js"] }); }
+  await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: ({ enabled, taskId }) => {
+    const state = window.__supplierResponseObservation; if (!state) return;
+    if (enabled && state.taskId !== taskId) { state.products = []; state.pagination = []; state.truncated = false; state.taskId = taskId; }
+    if (state.enabled !== enabled) { state.epoch++; if (enabled) state.challenge = false; }
+    if (!enabled) for (const reader of state.readers || []) void reader.cancel().catch(() => {});
+    state.enabled = enabled; state.blocked = !enabled;
+  }, args: [{ enabled, taskId: run?.id }] });
+  if (enabled && run?.observe_responses) await updateRun(run.id, task => ({ ...task, response_tab_ids: [...new Set([...(task.response_tab_ids || []), tabId])] }));
+}
+async function stopResponseObservation(run) {
+  if (!run?.observe_responses) return;
+  for (const tabId of [...new Set([run.tab_id, run.detail_tab_id, ...(run.response_tab_ids || []), ...(run.pending_navigation?.opened_ids || [])])].filter(id => id != null)) try { await responseObservation(tabId, false); } catch { /* closed or redirected tab */ }
+  if (chrome.scripting.unregisterContentScripts) { const registered = await chrome.scripting.getRegisteredContentScripts({ ids: [RESPONSE_SCRIPT, RESPONSE_BOOTSTRAP] }); if (registered.length) await chrome.scripting.unregisterContentScripts({ ids: registered.map(item => item.id) }); }
+}
 async function siteProfile(url) { const { profiles = {} } = await chrome.storage.local.get("profiles"); return profiles[new URL(url).origin] || {}; }
 async function storeProfile(url, patch) {
   return withStateLock(async () => { const { profiles = {} } = await chrome.storage.local.get("profiles"); const origin = new URL(url).origin; profiles[origin] = { ...(profiles[origin] || {}), ...patch, updated_at: new Date().toISOString() }; await chrome.storage.local.set({ profiles }); return profiles[origin]; });
 }
 async function finish(id, status, message, reason = null) {
+  let stopped;
   await withStateLock(async () => {
     const run = await activeRun(id); if (!run) return;
+    stopped = run;
     await chrome.storage.local.set({ run: { ...logEntry(run, status, message), status, pause_reason: reason } });
     await chrome.alarms.clear(ALARM);
   });
+  await stopResponseObservation(stopped);
 }
 async function waitForTab(tabId, id) {
   const deadline = Date.now() + 20000;
@@ -104,6 +138,7 @@ async function detailStep(run) {
   const item = collection.products.find(product => productKey(product) === key);
   if (!item) { await updateRun(run.id, current => ({ ...current, detail_index: current.detail_index + 1 })); return; }
   await updateRun(run.id, current => logEntry(current, "detail", `Карточка ${run.detail_index + 1}/${run.detail_total}: ${item.source}, товар ${item.product_id}.`));
+  if (run.observe_responses) { await ensureAccess(item.product_url); await registerResponseScripts(item.product_url); }
   let tab;
   if (run.detail_tab_id != null) { try { tab = await chrome.tabs.get(run.detail_tab_id); } catch { /* user closed the working tab */ } }
   if (!tab) {
@@ -112,6 +147,7 @@ async function detailStep(run) {
   } else if (S.productUrl(tab.url, undefined, String(item.source).startsWith("web:"))?.url !== item.product_url) tab = await chrome.tabs.update(tab.id, { url: item.product_url });
   if (!await activeRun(run.id)) return;
   await waitForTab(tab.id, run.id);
+  if (run.observe_responses) await responseObservation(tab.id, true, true);
   const result = await sendToTab(tab.id, "DETAIL", { query: item.query, timeout: 6000, profile: await siteProfile(item.product_url) });
   await withStateLock(async () => {
     const current = await activeRun(run.id); if (!current) return;
@@ -153,7 +189,7 @@ async function awaitNavigation(run) {
         if (peek.products.some(item => !previous.has(productKey(item)))) matches.push(tab);
       } catch (error) {
         if (["CHALLENGE", "RATE_LIMIT"].includes(error.code)) {
-          await updateRun(run.id, task => ({ ...task, tab_id: tabId, phase: "search", pending_navigation: null })); throw error;
+          await updateRun(run.id, task => ({ ...task, tab_id: tabId, phase: "search", pending_navigation: null, challenge_navigation: { source_url: pending.source_url, source_tab_id: pending.source_tab_id, target_tab_id: tabId } })); throw error;
         }
       }
     }
@@ -195,7 +231,7 @@ async function navigateStep(run) {
   if (selected.target_blank && selected.href) {
     const created = await chrome.tabs.create({ url: selected.href, active: false });
     await updateRun(run.id, current => ({ ...current, pending_navigation: { ...current.pending_navigation, exact_tab_id: created.id, opened_ids: [created.id] } }));
-  } else if (selected.selector.startsWith("link[rel")) await chrome.tabs.update(run.tab_id, { url: selected.href });
+  } else if (selected.action === "open-url" && !selected.selector.includes(" ::: ")) await chrome.tabs.update(run.tab_id, { url: selected.href });
   else {
     const clicked = await sendToTab(run.tab_id, "NEXT", { candidate_id: selected.id, profile });
     if (!clicked.moved) { await updateRun(run.id, current => ({ ...current, pending_navigation: null })); throw new Error("Элемент изменился перед нажатием. Повторите определение навигации."); }
@@ -211,6 +247,7 @@ async function processRun() {
     id = run.id;
     await chrome.alarms.create(ALARM, { periodInMinutes: 0.5 });
     if (run.phase === "details") { await detailStep(run); return; }
+    if (run.observe_responses) await responseObservation(run.tab_id, true, true);
     if (run.phase === "navigate") {
       await navigateStep(run);
       return;
@@ -253,11 +290,12 @@ async function startRun(options, detailsOnly = false) {
       id: crypto.randomUUID(), status: "running", phase: detailsOnly ? "details" : "search", tab_id: tab?.id || null,
       max_pages: maxPages, completed_pages: 0, query: S.text(options.query), scroll: options.scroll !== false,
       raw: options.raw !== false, enrich: options.enrich === true, interval_ms: interval * 1000,
+      observe_responses: options.observe_responses === true,
       previous_fingerprint: null, seen_fingerprints: [], product_keys: [],
       detail_queue: detailsOnly ? queue : [], detail_index: 0, detail_total: detailsOnly ? queue.length : 0,
       started_at: new Date().toISOString(), pause_reason: null, log: []
     }, detailsOnly ? "details" : "loading", detailsOnly ? `Проверю ${queue.length} карточек товаров.` : "Ожидаю товары и собираю выдачу…");
-    await withStateLock(async () => { await chrome.storage.local.set({ run, last_navigation: null, preferences: { max_pages: maxPages, query: run.query || "", scroll: run.scroll, raw: run.raw, enrich: run.enrich, interval_seconds: interval } }); await chrome.alarms.create(ALARM, { periodInMinutes: 0.5 }); });
+    await withStateLock(async () => { await chrome.storage.local.set({ run, last_navigation: null, preferences: { max_pages: maxPages, query: run.query || "", scroll: run.scroll, raw: run.raw, enrich: run.enrich, observe_responses: run.observe_responses, interval_seconds: interval } }); await chrome.alarms.create(ALARM, { periodInMinutes: 0.5 }); });
     void processRun();
     return { started: true };
   } finally { starting = false; }
@@ -271,6 +309,7 @@ async function pauseRun(status = "paused") {
   if (paused) for (const tabId of [paused.tab_id, paused.detail_tab_id].filter(id => id != null)) {
     try { await chrome.tabs.sendMessage(tabId, { target: "1688-content", type: "CANCEL" }); } catch { /* navigation can replace the page */ }
   }
+  await stopResponseObservation(paused);
   return { paused: true, stopped: true };
 }
 async function resumeRun(options = {}) {
@@ -281,8 +320,23 @@ async function resumeRun(options = {}) {
   if (!Number.isFinite(interval) || interval < 1 || interval > 30) throw new Error("Укажите паузу от 1 до 30 секунд.");
   if (options.tab_id != null && run.phase !== "details") { const selected = await chrome.tabs.get(Number(options.tab_id)); await ensureAccess(selected.url); run.tab_id = selected.id; run.phase = "search"; run.pending_navigation = null; run.navigation = null; }
   const tabId = run.phase === "details" ? run.detail_tab_id : run.tab_id;
-  if (tabId != null) { await chrome.tabs.get(tabId); await sendToTab(tabId, "RESET"); }
+  let reloadForResponses = false;
+  if (tabId != null) {
+    const tab = await chrome.tabs.get(tabId); await sendToTab(tabId, "RESET"); await sendToTab(tabId, "CHECK");
+    if (run.challenge_navigation && options.tab_id == null && run.phase !== "details") {
+      const peek = await sendToTab(tabId, "PEEK", { profile: await siteProfile(tab.url), query: run.query });
+      const previous = new Set((run.previous_fingerprint || "").split(","));
+      const changed = peek.products.some(item => !previous.has(productKey(item)));
+      const recovery = run.challenge_navigation;
+      run.phase = !changed && tabId === recovery.source_tab_id && S.canonicalUrl(tab.url) === S.canonicalUrl(recovery.source_url) ? "navigate" : "search";
+      run.pending_navigation = null; run.challenge_navigation = null;
+    } else if (run.observe_responses && run.pause_reason === "challenge" && run.phase === "search" && S.isMarketplaceUrl(tab.url) && S.detectSearch(tab.url).search_type === "text" && S.detectSearch(tab.url).query) {
+      const peek = await sendToTab(tabId, "PEEK", { profile: await siteProfile(tab.url), query: run.query });
+      reloadForResponses = !peek.products.length;
+    }
+  }
   await withStateLock(async () => { await chrome.storage.local.set({ run: { ...logEntry(run, run.phase, "Продолжаю с сохранённого этапа…"), status: "running", pause_reason: null, required_origin: null, interval_ms: interval * 1000 } }); });
+  if (reloadForResponses) { const tab = await chrome.tabs.get(tabId); await registerResponseScripts(tab.url); await chrome.tabs.update(tabId, { url: tab.url }); }
   void processRun(); return { resumed: true };
 }
 async function getState(full = false) {
@@ -315,9 +369,11 @@ async function importCollection(input) {
     const raw = new Map((collection.raw_cards || []).map(card => [`${card.source}:${card.product_id}:${card.source_page_url}`, card]));
     const keys = new Set(imported.map(productKey));
     if (Array.isArray(input.raw_cards) && input.raw_cards.length <= 10000) for (const card of input.raw_cards) {
-      const source = S.site(card?.source_page_url);
+      const source = card?.source || S.site(card?.source_page_url);
       if (source && keys.has(`${source}:${card.product_id}`) && typeof card.html === "string" && card.html.length <= 20000) {
         const safe = { source, product_id: String(card.product_id), source_page_url: card.source_page_url, html: card.html, collected_at: new Date().toISOString() };
+        if (!S.webUrl(safe.source_page_url)) continue;
+        if (card.record) try { const parsed = S.importProducts({ products: [card.record] })[0]; if (productKey(parsed) === `${source}:${safe.product_id}`) safe.record = parsed; } catch { /* preserve inert markup, discard malformed business record */ }
         raw.set(`${safe.source}:${safe.product_id}:${safe.source_page_url}`, safe);
       }
     }
@@ -374,6 +430,20 @@ async function profilePicked(sender, detail) {
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.target !== "1688-background" || sender.id !== chrome.runtime.id) return;
+  if (message.type === "RESPONSE_ALLOWED" && sender.tab) {
+    void chrome.storage.local.get("run").then(({ run }) => { const allowed = run?.status === "running" && run.observe_responses && [run.tab_id, run.detail_tab_id, run.pending_navigation?.exact_tab_id, ...(run.pending_navigation?.opened_ids || [])].includes(sender.tab.id); respond({ ok: true, result: { allowed: Boolean(allowed), taskId: allowed ? run.id : null } }); }); return true;
+  }
+  if (message.type === "PAGE_DATA" && sender.tab) {
+    void (async () => {
+      const tab = await chrome.tabs.get(sender.tab.id); await ensureAccess(tab.url);
+      const results = await chrome.scripting.executeScript({ target: { tabId: sender.tab.id }, world: "MAIN", func: globalThis.SupplierPageData.readPageState });
+      const result = results[0]?.result || { products: [], pagination: [] };
+      const observed = await chrome.scripting.executeScript({ target: { tabId: sender.tab.id }, world: "MAIN", func: () => { const state = window.__supplierResponseObservation; return state ? { products: state.products, pagination: state.pagination, truncated: state.truncated, enabled: state.enabled, challenge: state.challenge } : null; } });
+      const data = observed[0]?.result;
+      if (data?.enabled) { result.responses = data.products; result.pagination.push(...data.pagination); result.diagnostics.truncated ||= data.truncated; result.diagnostics.challenge = data.challenge; }
+      return result;
+    })().then(result => respond({ ok: true, result })).catch(error => respond({ ok: false, error: error.message })); return true;
+  }
   if (message.type === "PROFILE_PICKED" && sender.tab) { void profilePicked(sender, message.detail || {}).then(() => respond({ ok: true })).catch(error => respond({ ok: false, error: error.message })); return true; }
   if (message.type === "PROGRESS" && sender.tab) {
     void withStateLock(async () => {

@@ -9,7 +9,7 @@ before(async () => { browser = await chromium.launch({ executablePath: process.e
 after(async () => { await browser?.close(); });
 async function engine(t) {
   const page = await browser.newPage(); t.after(() => page.close()); await page.route("**/*", route => route.abort());
-  for (const name of ["shared.js", "navigation.js", "generic.js", "engine.js"]) await page.addScriptTag({ path: path.join(__dirname, "../extension", name) });
+  for (const name of ["shared.js", "navigation.js", "generic.js", "data-sources.js", "engine.js"]) await page.addScriptTag({ path: path.join(__dirname, "../extension", name) });
   return page;
 }
 async function extract(page, html, url, mode = "search") { return page.evaluate(({ html, url, mode }) => SupplierCollectorEngine.fromHTML(html, { url, mode }), { html, url, mode }); }

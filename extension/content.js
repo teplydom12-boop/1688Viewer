@@ -8,21 +8,26 @@
   let profile = {};
   let collecting = false;
   let cancelled = false;
+  let pageData = { products: [], pagination: [] }, dataReadAt = 0;
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   function visible(element) {
     if (!element || !element.isConnected) return false;
-    const style = getComputedStyle(element);
-    return style.display !== "none" && style.visibility !== "hidden" && element.getClientRects().length > 0;
+    return N.visible(element, false);
   }
 
   function blockedReason() {
     if (/^(login|passport|accounts)\./.test(location.hostname) || /\/(?:login|punish|captcha|verify)(?:[/.?]|$)/i.test(location.pathname)) return "Откройте страницу после входа и проверки безопасности.";
-    const challenge = [...document.querySelectorAll('#nc_1_wrapper, .nc-container, [class*="baxia-dialog"], [id*="captcha"], [class*="captcha"], iframe[src*="punish"], iframe[src*="captcha"], input[type="password"]')].find(visible);
+    const scopes = N.scopes(document);
+    const challenge = scopes.flatMap(scope => [...scope.querySelectorAll('#nc_1_wrapper, .nc-container, [class*="baxia-dialog"], [id*="captcha"], [class*="captcha"], [class*="turnstile"], [class*="hcaptcha"], [data-sitekey], iframe[src*="punish"], iframe[src*="captcha"], iframe[src*="challenge"], input[type="password"]')]).find(node => !node.closest('.grecaptcha-badge,[class*="captcha-badge"],[class*="turnstile-badge"]') && visible(node));
     if (challenge) return "Сайт показывает вход или проверку безопасности. Пройдите её вручную и нажмите «Продолжить».";
-    const body = S.text(document.body?.innerText) || "";
-    if (body.length < 2000 && /too many requests|temporarily blocked|request limit|\b429\b|系统繁忙/i.test(body)) return "Сайт ограничил частоту запросов. Подождите, увеличьте паузу между переходами и продолжите работу.";
-    if (body.length < 2000 && /滑动验证|拖动滑块|安全验证|访问受限|请完成验证|verify you are human|access denied|unusual traffic|security verification/i.test(body)) return "Сайт запросил проверку безопасности. Пройдите её вручную и нажмите «Продолжить».";
+    const body = S.text(scopes.map(scope => {
+      if (scope.body) return !scope.defaultView?.frameElement || visible(scope.defaultView.frameElement) ? scope.body.innerText : "";
+      if (scope.host && visible(scope.host)) return [...scope.querySelectorAll("*")].filter(node => !node.children.length && visible(node)).map(node => node.innerText || node.textContent).join(" ");
+      return "";
+    }).join(" ")) || "";
+    if (body.length < 2000 && /too many requests|temporarily blocked|request limit|(?:HTTP|status|error)\s*[:=-]?\s*429\b|系统繁忙/i.test(body)) return "Сайт ограничил частоту запросов. Подождите, увеличьте паузу между переходами и продолжите работу.";
+    if (body.length < 2000 && /滑动验证|拖动滑块|安全验证|访问受限|请完成验证|verify you are human|access denied|unusual traffic|security verification|slide to verify|подтвердите.{0,40}(?:человек|робот)|проверка безопасности/i.test(body)) return "Сайт запросил проверку безопасности. Пройдите её вручную и нажмите «Продолжить».";
     return null;
   }
 
@@ -41,7 +46,15 @@
   function extract(label, mode = "search", raw = true) {
     check();
     if (mode === "search" && S.productUrl(location.href, location.href)) throw new Error("Откройте страницу поисковой выдачи, а не карточку товара.");
-    return E.extract(document, { url: location.href, label, mode, raw, profile });
+    return E.extract(document, { url: location.href, label, mode, raw, profile, pageData });
+  }
+  async function refreshPageData(force = false) {
+    check();
+    if (!force && Date.now() - dataReadAt < 350 || typeof chrome === "undefined" || !chrome.runtime?.sendMessage) return;
+    dataReadAt = Date.now();
+    try { const response = await chrome.runtime.sendMessage({ target: "1688-background", type: "PAGE_DATA" }); if (response?.ok) pageData = response.result; } catch { /* DOM and inert JSON remain available */ }
+    if (pageData.diagnostics?.challenge) { const error = new Error("Сайт запросил проверку безопасности в ответе на загрузку товаров. Пройдите её вручную и нажмите «Продолжить»."); error.code = "CHALLENGE"; throw error; }
+    check();
   }
   function readPage(label) { return extract(label).products; }
 
@@ -49,6 +62,7 @@
     const deadline = Date.now() + 15000;
     const previousIds = new Set((previousFingerprint || "").split(","));
     while (Date.now() < deadline) {
+      await refreshPageData();
       const result = extract(label, mode, raw);
       if (result.products.length && (!previousFingerprint || result.products.some(item => !previousIds.has(`${item.source}:${item.product_id}`) && !previousIds.has(item.product_id)))) return result;
       await delay(400);
@@ -61,6 +75,8 @@
     if (products.some(item => !item.shop_name)) warnings.push("В выдаче не показаны названия части магазинов. Используйте проверку карточек товаров.");
     if (products.some(item => item.extraction_confidence < 90)) warnings.push("Часть карточек определена по структуре. Проверьте несколько строк перед большим сбором.");
     if (products.some(item => !item.product_url)) warnings.push("У части товаров нет доступной ссылки на карточку; автоматическая проверка таких товаров пропускается.");
+    if (diagnostics.data_truncated) warnings.push("Данные приложения превысили лимит анализа. Часть результатов могла быть пропущена.");
+    if (diagnostics.price_conflicts) warnings.push(`У ${diagnostics.price_conflicts} товаров источники показывают разные цены. Сравните значения со страницей.`);
     return { products, raw_cards: [...rawCards.values()], page: {
       page_url: location.href, ...S.detectSearch(location.href, query, document.querySelector('input[name="keywords"], input[name="SearchText"], input[type="search"], [role="searchbox"]')?.value),
       source: S.site(location.href), collected_at: new Date().toISOString(), product_count: products.length,
@@ -77,33 +93,38 @@
     let diagnostics = {};
     const absorb = result => {
       products = S.mergeProducts(products, result.products); diagnostics = result.diagnostics;
-      for (const card of result.raw_cards) rawCards.set(card.product_id, card);
+      for (const card of result.raw_cards) rawCards.set(`${card.source}:${card.product_id}`, card);
     };
+    const watcher = SupplierObserver.watch(document, () => absorb(extract(options.query, "search", options.raw !== false)), check);
     try {
       progress("loading", "Ожидаю загрузку выдачи…", 0);
       absorb(await waitForResults(options.query, options.previousFingerprint, "search", options.raw !== false));
+      await watcher.wait({ minMs: 350, maxMs: 1800 }); await refreshPageData();
+      absorb(extract(options.query, "search", options.raw !== false));
       let reachedBottom = false, stableAtBottom = 0;
       if (options.scroll) {
-        window.scrollTo(0, 0); await delay(350);
+        const targets = N.scrollTargets(document); targets.forEach(target => target.node.scrollTop = 0); await watcher.wait({ minMs: 350, maxMs: 1400 });
         absorb(extract(options.query, "search", options.raw !== false));
         for (let scrolls = 0; scrolls < 32; scrolls++) {
           check();
           progress("scrolling", `Догружаю выдачу: ${products.length} товаров, прокрутка ${scrolls + 1}.`, products.length);
           const before = products.length;
-          window.scrollBy(0, Math.max(500, innerHeight * 0.85));
-          await delay(options.scroll_delay || 650);
+          const surfaces = N.scrollTargets(document);
+          for (const target of surfaces) target.node.scrollTop += Math.max(200, target.node.clientHeight * 0.85);
+          await watcher.wait({ minMs: options.scroll_delay || 650, maxMs: Math.max(1600, (options.scroll_delay || 650) * 2) });
+          await refreshPageData();
           absorb(extract(options.query, "search", options.raw !== false));
-          reachedBottom = scrollY + innerHeight >= document.documentElement.scrollHeight - 12;
+          reachedBottom = surfaces.every(target => target.node.scrollTop + target.node.clientHeight >= target.node.scrollHeight - 12);
           stableAtBottom = reachedBottom && products.length === before ? stableAtBottom + 1 : 0;
           if (stableAtBottom >= 3) break;
         }
       }
       const warnings = options.scroll && !reachedBottom ? ["Достигнут предел прокрутки. Часть выдачи могла не загрузиться; соберите её вручную."] : [];
-      return pageResult(products, rawCards, diagnostics, options.query, warnings);
+      return pageResult(products, rawCards, { ...diagnostics, ...watcher.stats() }, options.query, warnings);
     } catch (error) {
       if (products.length) error.partial = pageResult(products, rawCards, diagnostics, options.query, ["Страница собрана частично: работа была прервана."]);
       throw error;
-    } finally { collecting = false; }
+    } finally { watcher.stop(); collecting = false; }
   }
 
   async function detail(options = {}) {
@@ -114,7 +135,8 @@
     const deadline = Date.now() + (options.timeout || 8000);
     do {
       check();
-      result = E.extract(document, { url: location.href, label: options.query, mode: "detail", raw: false, profile });
+      await refreshPageData();
+      result = E.extract(document, { url: location.href, label: options.query, mode: "detail", raw: false, profile, pageData });
       if (result.products.some(item => item.shop_name && item.supplier_url)) break;
       await delay(500);
     } while (Date.now() < deadline);
@@ -125,18 +147,35 @@
   function nextPageElement() {
     return N.analyze(document, { url: location.href, profile: profile.navigation }).chosen?.node || null;
   }
-  function navigation(options = {}) {
+  async function navigation(options = {}) {
     check(); profile = options.profile || profile;
-    return N.publicResult(N.analyze(document, { url: location.href, profile: profile.navigation }));
+    await refreshPageData(true);
+    const data = SupplierDataSources.extract(document, { url: location.href, pageData });
+    return N.publicResult(N.analyze(document, { url: location.href, profile: profile.navigation, pagination: data.pagination }));
   }
-  function goNext(options = {}) {
+  async function goNext(options = {}) {
     check();
     profile = options.profile || profile;
-    const result = N.analyze(document, { url: location.href, profile: profile.navigation });
+    await refreshPageData(true);
+    const data = SupplierDataSources.extract(document, { url: location.href, pageData });
+    const result = N.analyze(document, { url: location.href, profile: profile.navigation, pagination: data.pagination });
     const selected = options.candidate_id ? result.candidates.find(item => item.id === options.candidate_id) : result.chosen;
     if (!selected) return { moved: false, navigation: N.publicResult(result) };
     const element = selected.node;
-    setTimeout(() => { if (!cancelled) element.click(); }, 100);
+    setTimeout(() => {
+      if (cancelled || blockedReason()) return;
+      if (selected.action === "open-url") {
+        (element.ownerDocument?.defaultView || document.defaultView).location.href = selected.href;
+      } else if (selected.action === "form-page") {
+        const form = N.resolve(document, selected.form_selector)[0]; if (!form || !element.isConnected) return;
+        const view = element.ownerDocument.defaultView;
+        const prototype = element.tagName === "SELECT" ? view.HTMLSelectElement.prototype : view.HTMLInputElement.prototype;
+        Object.getOwnPropertyDescriptor(prototype, "value").set.call(element, selected.next_value);
+        element.dispatchEvent(new view.Event("input", { bubbles: true })); element.dispatchEvent(new view.Event("change", { bubbles: true }));
+        const submitter = [...form.querySelectorAll('button:not([type]),button[type="submit"],input[type="submit"]')].find(node => !N.disabled(node));
+        if (submitter || element.tagName !== "SELECT") form.requestSubmit(submitter);
+      } else element.click();
+    }, 100);
     return { moved: true, candidate: (({ node, ...item }) => item)(selected) };
   }
 
@@ -169,8 +208,8 @@
   if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (message?.target !== "1688-content") return;
     if (message.type === "CANCEL") { cancelled = true; respond({ ok: true }); return; }
-    if (message.type === "RESET") { cancelled = false; respond({ ok: true, result: {} }); return; }
-    const operation = message.type === "COLLECT" ? () => collect(message.options) : message.type === "DETAIL" ? () => detail(message.options) : message.type === "NEXT" ? () => goNext(message.options) : message.type === "NAVIGATE_OPTIONS" ? () => navigation(message.options) : message.type === "PICKER" ? () => picker(message.options) : message.type === "PEEK" ? () => { profile = message.options?.profile || profile; return extract(message.options?.query, "search", false); } : null;
+    if (message.type === "RESET") { cancelled = false; dataReadAt = 0; pageData = { products: [], pagination: [] }; respond({ ok: true, result: {} }); return; }
+    const operation = message.type === "COLLECT" ? () => collect(message.options) : message.type === "DETAIL" ? () => detail(message.options) : message.type === "NEXT" ? () => goNext(message.options) : message.type === "NAVIGATE_OPTIONS" ? () => navigation(message.options) : message.type === "PICKER" ? () => picker(message.options) : message.type === "CHECK" ? () => { check(); return {}; } : message.type === "PEEK" ? async () => { profile = message.options?.profile || profile; await refreshPageData(); return extract(message.options?.query, "search", false); } : null;
     if (!operation) return;
     Promise.resolve().then(operation).then(result => respond({ ok: true, result })).catch(error => respond({ ok: false, error: error.message, code: error.code, partial: error.partial }));
     return true;

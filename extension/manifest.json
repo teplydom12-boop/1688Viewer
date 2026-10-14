@@ -1,22 +1,70 @@
 {
   "manifest_version": 3,
   "name": "Supplier Viewer — поиск поставщиков",
-  "version": "0.3.0",
+  "version": "0.4.0",
+  "minimum_chrome_version": "111",
   "description": "Карточки товаров на разных сайтах: анализ структуры, навигация и новые вкладки, поставщики и экспорт.",
-  "permissions": ["activeTab", "tabs", "scripting", "storage", "unlimitedStorage", "downloads", "alarms"],
-  "optional_host_permissions": ["https://*/*", "http://*/*"],
-  "host_permissions": ["https://*.1688.com/*", "https://1688.com/*", "https://*.alibaba.com/*", "https://alibaba.com/*", "https://*.made-in-china.com/*", "https://made-in-china.com/*"],
-  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'none'; img-src 'self' data:; style-src 'self'" },
-  "background": { "service_worker": "background.js" },
-  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting",
+    "storage",
+    "unlimitedStorage",
+    "downloads",
+    "alarms"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "host_permissions": [
+    "https://*.1688.com/*",
+    "https://1688.com/*",
+    "https://*.alibaba.com/*",
+    "https://alibaba.com/*",
+    "https://*.made-in-china.com/*",
+    "https://made-in-china.com/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'none'; img-src 'self' data:; style-src 'self'"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
   "action": {
-    "default_icon": { "16": "icons/16.png", "32": "icons/32.png" },
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png"
+    },
     "default_popup": "popup.html",
     "default_title": "Supplier Viewer"
   },
-  "content_scripts": [{
-    "matches": ["https://*.1688.com/*", "https://1688.com/*", "https://*.alibaba.com/*", "https://alibaba.com/*", "https://*.made-in-china.com/*", "https://made-in-china.com/*"],
-    "js": ["shared.js", "navigation.js", "generic.js", "engine.js", "content.js"],
-    "run_at": "document_idle"
-  }]
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.1688.com/*",
+        "https://1688.com/*",
+        "https://*.alibaba.com/*",
+        "https://alibaba.com/*",
+        "https://*.made-in-china.com/*",
+        "https://made-in-china.com/*"
+      ],
+      "js": [
+        "shared.js",
+        "navigation.js",
+        "generic.js",
+        "data-sources.js",
+        "engine.js",
+        "observer.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
 }

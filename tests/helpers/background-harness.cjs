@@ -31,7 +31,9 @@ async function createHarness(browser, t) {
   await target.addInitScript({ path: path.join(extensionPath, "shared.js") });
   await target.addInitScript({ path: path.join(extensionPath, "navigation.js") });
   await target.addInitScript({ path: path.join(extensionPath, "generic.js") });
+  await target.addInitScript({ path: path.join(extensionPath, "data-sources.js") });
   await target.addInitScript({ path: path.join(extensionPath, "engine.js") });
+  await target.addInitScript({ path: path.join(extensionPath, "observer.js") });
   await target.addInitScript({ path: path.join(extensionPath, "content.js") });
   target.on("popup", async child => {
     const parentId = [...tabs].find(([, item]) => item === target)?.[0]; const id = nextTabId++; tabs.set(id, child);
@@ -105,7 +107,7 @@ async function createHarness(browser, t) {
     },
     permissions: { async contains({ origins }) { return origins.every(pattern => shared.isMarketplaceUrl(pattern.replace("*", "")) || granted.has(pattern)); }, async request({ origins }) { origins.forEach(pattern => granted.add(pattern)); return true; } },
     scripting: {
-      async executeScript({ target, files }) { for (const file of files) await tabs.get(target.tabId).addScriptTag({ path: path.join(extensionPath, file) }); }
+      async executeScript({ target, files, func, args = [] }) { if (func) return [{ frameId: 0, result: await tabs.get(target.tabId).evaluate(func, args[0]) }]; for (const file of files) await tabs.get(target.tabId).addScriptTag({ path: path.join(extensionPath, file) }); }
     },
     alarms: {
       async create(name, options) { alarms.set(name, options); },

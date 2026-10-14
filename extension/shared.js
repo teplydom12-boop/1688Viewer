@@ -9,6 +9,12 @@
   function isMarketplaceUrl(value) {
     return Boolean(marketplace(value));
   }
+  function quantity(value) {
+    const scalar = input => typeof input === "number" && Number.isFinite(input) ? String(input) : text(input);
+    if (!value || typeof value !== "object") return scalar(value);
+    const amount = scalar(value.minValue ?? value.value), unit = scalar(value.unitText ?? value.unitCode);
+    return amount ? [amount, unit].filter(Boolean).join(" ") : null;
+  }
 
   function webUrl(value) {
     try { const url = new URL(value); return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password; } catch { return false; }
@@ -212,6 +218,7 @@
       result.identity_type = text(item.identity_type) || (generic ? noLink ? "card-fingerprint" : "url" : "marketplace-id");
       result.native_id = text(item.native_id)?.slice(0, 1000) || null;
       result.extraction_confidence = Math.min(100, Math.max(0, Number(item.extraction_confidence) || 0));
+      if (Array.isArray(item.data_conflicts)) result.data_conflicts = item.data_conflicts.filter(conflict => conflict?.field === "price" && Array.isArray(conflict.observations)).slice(0, 1).map(conflict => ({ field: "price", observations: conflict.observations.slice(0, 8).map(observation => ({ value: text(observation?.value)?.slice(0, 1000) || "", method: text(observation?.method)?.slice(0, 100) || "" })).filter(observation => observation.value) }));
       result.collected_at = Number.isNaN(Date.parse(item.collected_at)) ? new Date().toISOString() : item.collected_at;
       result.last_seen_at = result.collected_at;
       if (!Number.isNaN(Date.parse(item.last_seen_at))) result.last_seen_at = item.last_seen_at;
@@ -226,7 +233,7 @@
     });
   }
 
-  const api = { text, marketplace, isMarketplaceUrl, webUrl, site, originPattern, digest, canonicalUrl, dangerousUrl, productUrl, supplierUrl, httpUrl, detectSearch, mergeProducts, fingerprint, supplierGroups, csv, importProducts };
+  const api = { text, quantity, marketplace, isMarketplaceUrl, webUrl, site, originPattern, digest, canonicalUrl, dangerousUrl, productUrl, supplierUrl, httpUrl, detectSearch, mergeProducts, fingerprint, supplierGroups, csv, importProducts };
   root.SupplierCollector = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(globalThis);
