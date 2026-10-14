@@ -10,6 +10,34 @@
     return Boolean(marketplace(value));
   }
 
+  function webUrl(value) {
+    try { const url = new URL(value); return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password; } catch { return false; }
+  }
+  function site(value) {
+    if (!webUrl(value)) return null;
+    return marketplace(value) || `web:${new URL(value).host.toLowerCase()}`;
+  }
+  function originPattern(value) { const url = new URL(value); return `${url.protocol}//${url.hostname}/*`; }
+  function digest(value) {
+    let hash = 14695981039346656037n;
+    for (const char of value) { hash ^= BigInt(char.codePointAt(0)); hash = BigInt.asUintN(64, hash * 1099511628211n); }
+    return hash.toString(16).padStart(16, "0");
+  }
+  function canonicalUrl(value, base) {
+    const safe = httpUrl(value, base); if (!safe) return null;
+    const url = new URL(safe);
+    const stripTracking = params => { for (const key of [...params.keys()]) if (/^(?:utm_.*|spm|ref|referrer|tracking|track|from|fbclid|gclid|_ga)$/i.test(key)) params.delete(key); params.sort(); };
+    if (/^#!?\//.test(url.hash)) {
+      const route = new URL(url.hash.replace(/^#!?/, ""), url.origin); stripTracking(route.searchParams);
+      url.hash = `${url.hash.startsWith("#!") ? "!" : ""}${route.pathname}${route.search}`;
+    } else url.hash = "";
+    stripTracking(url.searchParams);
+    url.searchParams.sort(); return url.href;
+  }
+  function dangerousUrl(value) {
+    try { const url = new URL(value); const route = /^#!?\//.test(url.hash) ? new URL(url.hash.replace(/^#!?/, ""), url.origin) : null; return /(?:^|\/)(?:cart|checkout|buy|payment|logout|signout|delete|remove|login|signin|register|account)(?:\/|$)/i.test(url.pathname + (route ? "/" + route.pathname : "")) || /(?:action|do)=(?:delete|remove|logout|buy|checkout)/i.test(url.search + (route?.search || "")); } catch { return true; }
+  }
+
   function marketplace(value) {
     try {
       const url = new URL(value);
@@ -21,7 +49,8 @@
     } catch { return null; }
   }
 
-  function productUrl(value, base) {
+  function productUrl(value, base, generic = false) {
+    if (typeof value !== "string" || !value.trim()) return null;
     try {
       const url = new URL(value, base);
       if (!["http:", "https:"].includes(url.protocol)) return null;
@@ -38,18 +67,23 @@
         const match = url.pathname.match(/\/product\/([^/]+)\/[^/]+\.html\/?$/) || url.pathname.match(/\/product-detail-([^/.]+)\.html$/);
         if (match) return { id: match[1], url: `https://${url.hostname}${url.pathname}` };
       }
+      if (generic && !dangerousUrl(url.href)) {
+        const canonical = canonicalUrl(url.href);
+        if (canonical) return { id: `url:${digest(canonical)}`, url: canonical };
+      }
       return null;
     } catch { return null; }
   }
 
-  function supplierUrl(value, base) {
+  function supplierUrl(value, base, generic = false) {
+    if (typeof value !== "string" || !value.trim()) return null;
     try {
       const url = new URL(value, base);
       if (!["http:", "https:"].includes(url.protocol)) return null;
       const source = marketplace(`https://${url.hostname}/`);
       if (source === "alibaba" && /^[a-z0-9-]+\.en\.alibaba\.com$/.test(url.hostname)) return `https://${url.hostname}/`;
       if (source === "made-in-china" && /^[a-z0-9-]+\.en\.made-in-china\.com$/.test(url.hostname)) return `https://${url.hostname}/`;
-      if (source !== "1688" || !url.hostname.endsWith(".1688.com")) return null;
+      if (source !== "1688" || !url.hostname.endsWith(".1688.com")) return generic && !dangerousUrl(url.href) ? canonicalUrl(url.href) : null;
       const subdomain = url.hostname.slice(0, -9);
       if (!subdomain || ["s", "detail", "m", "www", "login", "passport", "air", "offer", "search", "imgsearch", "image", "sale", "dj", "rule", "fuwu", "cart", "trade", "work", "buy", "club", "view", "payments"].includes(subdomain)) return null;
       // A company subdomain identifies the storefront; discard tracking and page paths.
@@ -58,6 +92,7 @@
   }
 
   function httpUrl(value, base) {
+    if (typeof value !== "string" || !value.trim()) return null;
     try {
       const url = new URL(value, base);
       url.username = ""; url.password = "";
@@ -90,10 +125,20 @@
       const merged = old ? { ...old } : { ...item };
       if (old) {
         for (const [field, value] of Object.entries(item)) {
-          if (value !== null && value !== "" && value !== undefined && !["collected_at", "sightings", "field_sources"].includes(field)) merged[field] = value;
+          const samePass = old.last_seen_at === (item.last_seen_at || item.collected_at);
+          const weaker = samePass && (old.field_confidence?.[field] || 0) > (item.field_confidence?.[field] || 0);
+          if (value !== null && value !== "" && value !== undefined && !["collected_at", "sightings", "field_sources", "field_confidence"].includes(field) && !weaker) merged[field] = value;
         }
       }
-      merged.field_sources = { ...(old?.field_sources || {}), ...(item.field_sources || {}) };
+      merged.field_sources = { ...(old?.field_sources || {}) };
+      merged.field_confidence = { ...(old?.field_confidence || {}) };
+      for (const [field, method] of Object.entries(item.field_sources || {})) {
+        const samePass = old?.last_seen_at === (item.last_seen_at || item.collected_at);
+        if (item[field] != null && (!samePass || (item.field_confidence?.[field] || 0) >= (old?.field_confidence?.[field] || 0))) {
+          merged.field_sources[field] = method;
+          merged.field_confidence[field] = item.field_confidence?.[field] || 0;
+        }
+      }
       merged.last_seen_at = item.last_seen_at || item.collected_at;
       const initialSightings = old ? old.sightings || [{
         query: old.query, search_type: old.search_type, source_page_url: old.source_page_url
@@ -120,7 +165,7 @@
       if (parent.get(value) !== value) parent.set(value, find(parent.get(value)));
       return parent.get(value);
     };
-    const aliases = item => { const url = supplierUrl(item.supplier_url); return [item.supplier_id && `${item.source}:id:${item.supplier_id}`, url && `${item.source}:url:${url}`].filter(Boolean); };
+    const aliases = item => { const url = supplierUrl(item.supplier_url, undefined, String(item.source).startsWith("web:")); return [item.supplier_id && `${item.source}:id:${item.supplier_id}`, url && `${item.source}:url:${url}`].filter(Boolean); };
     for (const item of products) {
       const keys = aliases(item);
       if (keys.length === 2) parent.set(find(keys[1]), find(keys[0]));
@@ -153,27 +198,35 @@
   function importProducts(input) {
     if (!input || !Array.isArray(input.products) || input.products.length > 10000) throw new Error("Нужен JSON с массивом products (не больше 10 000 товаров).");
     return input.products.map(item => {
-      const offer = productUrl(item.product_url);
-      const source = marketplace(item.product_url);
-      if (!offer || !source || (item.source && item.source !== source)) throw new Error("В файле обнаружена неверная ссылка или площадка товара.");
-      const result = { source, product_id: offer.id, product_url: offer.url };
+      const generic = String(item?.source || "").startsWith("web:");
+      const offer = productUrl(item?.product_url, undefined, generic);
+      const source = site(item?.product_url) || (generic ? site(item.source_page_url) : null);
+      const noLink = !item?.product_url && /^(?:native|card):[a-zA-Z0-9:_-]+$/.test(String(item?.product_id)) && site(item?.source_page_url);
+      const actualSource = source || (noLink ? site(item.source_page_url) : null);
+      if ((!offer && !noLink) || !actualSource || (item.source && item.source !== actualSource)) throw new Error("В файле обнаружена неверная ссылка или площадка товара.");
+      const result = { source: actualSource, product_id: offer?.id || item.product_id, product_url: offer?.url || null };
       for (const field of ["title", "shop_name", "price", "minimum_order", "query", "search_type", "supplier_id"]) result[field] = text(item[field])?.slice(0, 1000) || null;
-      result.supplier_url = supplierUrl(item.supplier_url);
+      result.supplier_url = supplierUrl(item.supplier_url, undefined, generic);
       result.image_url = httpUrl(item.image_url);
-      result.source_page_url = isMarketplaceUrl(item.source_page_url) ? item.source_page_url : result.product_url;
+      result.source_page_url = webUrl(item.source_page_url) ? item.source_page_url : result.product_url;
+      result.identity_type = text(item.identity_type) || (generic ? noLink ? "card-fingerprint" : "url" : "marketplace-id");
+      result.native_id = text(item.native_id)?.slice(0, 1000) || null;
+      result.extraction_confidence = Math.min(100, Math.max(0, Number(item.extraction_confidence) || 0));
       result.collected_at = Number.isNaN(Date.parse(item.collected_at)) ? new Date().toISOString() : item.collected_at;
       result.last_seen_at = result.collected_at;
       if (!Number.isNaN(Date.parse(item.last_seen_at))) result.last_seen_at = item.last_seen_at;
       if (item.field_sources && typeof item.field_sources === "object") {
         result.field_sources = {};
-        for (const field of ["title", "price", "minimum_order", "shop_name", "supplier_url", "supplier_id"]) if (text(item.field_sources[field])) result.field_sources[field] = text(item.field_sources[field]).slice(0, 100);
+        result.field_confidence = {};
+        for (const field of ["title", "price", "minimum_order", "shop_name", "supplier_url", "supplier_id", "image_url"]) if (text(item.field_sources[field])) result.field_sources[field] = text(item.field_sources[field]).slice(0, 100);
+        for (const field of Object.keys(result.field_sources)) if (Number.isFinite(item.field_confidence?.[field])) result.field_confidence[field] = Math.min(100, Math.max(0, item.field_confidence[field]));
       }
       result.sightings = [{ query: result.query, search_type: result.search_type, source_page_url: result.source_page_url }];
       return result;
     });
   }
 
-  const api = { text, marketplace, isMarketplaceUrl, productUrl, supplierUrl, httpUrl, detectSearch, mergeProducts, fingerprint, supplierGroups, csv, importProducts };
+  const api = { text, marketplace, isMarketplaceUrl, webUrl, site, originPattern, digest, canonicalUrl, dangerousUrl, productUrl, supplierUrl, httpUrl, detectSearch, mergeProducts, fingerprint, supplierGroups, csv, importProducts };
   root.SupplierCollector = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(globalThis);

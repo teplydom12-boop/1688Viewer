@@ -2,13 +2,14 @@
 const $ = id => document.getElementById(id);
 const S = globalThis.SupplierCollector;
 let state = null, initialized = false, refreshing = false, pendingRefresh = false, pendingData = false;
+let tabs = [];
 const expanded = new Set();
 const stages = { loading: "Загрузка", scrolling: "Догрузка выдачи", saved: "Сохранение", waiting: "Пауза между переходами", search: "Сбор выдачи", navigate: "Переход", details: "Проверка карточек", detail: "Данные поставщика", "detail-saved": "Карточка сохранена", paused: "Работа приостановлена", stopped: "Работа остановлена", finished: "Завершено" };
 async function send(type, options) { const response = await chrome.runtime.sendMessage({ target: "1688-background", type, options }); if (!response?.ok) throw new Error(response?.error || "Расширение не ответило."); return response.result; }
 function error(error) { $("error").textContent = error?.message || String(error); $("error").hidden = false; }
 async function action(operation) { $("error").hidden = true; try { await operation(); await refresh(true); } catch (e) { error(e); } }
 function element(tag, content, className) { const node = document.createElement(tag); if (content != null) node.textContent = content; if (className) node.className = className; return node; }
-function safeLink(url, label) { const node = element("a", label); if (S.isMarketplaceUrl(url)) node.href = url; node.target = "_blank"; node.rel = "noopener noreferrer"; return node; }
+function safeLink(url, label) { const node = element("a", label); if (S.webUrl(url)) node.href = url; else node.textContent = "Ссылка недоступна"; node.target = "_blank"; node.rel = "noopener noreferrer"; return node; }
 function productTable(products) {
   const table = element("table", null, "product-tree");
   const head = element("thead"); const row = element("tr"); ["Товар", "Цена", "Минимальный заказ", "Карточка"].forEach(label => row.append(element("th", label))); head.append(row);
@@ -16,6 +17,7 @@ function productTable(products) {
   for (const product of products) {
     const row = element("tr"); const title = element("td", product.title || "Название не получено", "title-cell");
     title.append(element("small", `ID: ${product.product_id}${product.query ? " · " + product.query : ""}`));
+    if (product.extraction_confidence) title.append(element("small", `Оценка извлечения: ${product.extraction_confidence}/100 · ${product.identity_type === "card-fingerprint" ? "без официального ID" : product.identity_type || "ID товара"}`, "confidence"));
     const price = element("td", product.price || "—"); const moq = element("td", product.minimum_order || "—");
     const link = element("td"); link.append(safeLink(product.product_url, "Открыть ↗"));
     row.append(title, price, moq, link); body.append(row);
@@ -49,10 +51,23 @@ function renderTable() {
   $("filtered-count").textContent = `${groups.length} поставщиков · ${groups.reduce((count, group) => count + group.products.length, 0) + unresolved.length} товаров`;
 }
 async function refreshTabs() {
-  const tabs = await send("TABS"); const previous = $("tab").value;
+  tabs = await send("TABS"); const previous = $("tab").value;
   $("tab").replaceChildren(...tabs.map(tab => { const option = element("option", `${tab.source}: ${tab.title}`); option.value = tab.id; return option; }));
   if (!tabs.length) { const option = element("option", "Откройте вкладку с поисковой выдачей"); option.value = ""; $("tab").append(option); }
   else if (tabs.some(tab => String(tab.id) === previous)) $("tab").value = previous;
+}
+function grant(pattern) { return chrome.permissions ? chrome.permissions.request({ origins: [pattern] }).then(allowed => { if (!allowed) throw new Error("Доступ к сайту не разрешён. Выберите другой сайт или разрешите доступ позже."); }) : Promise.resolve(); }
+function authorizeSelected() { const tab = tabs.find(tab => String(tab.id) === $("tab").value); if (!tab) return Promise.reject(new Error("Выберите открытую вкладку.")); return grant(S.originPattern(tab.url)); }
+function renderNavigation() {
+  const navigation = state?.navigation;
+  $("nav-summary").textContent = !navigation ? "Алгоритм проверяет подписи, стрелки, номера страниц и ссылки." : navigation.decision === "automatic" ? `Автоматический выбор: «${navigation.chosen.label}», оценка ${navigation.chosen.confidence}/100.` : navigation.decision === "exhausted" ? "Контрол следующей страницы отключён: вероятно, выдача закончилась." : "Автоматический выбор неоднозначен. Выберите вариант или укажите кнопку прямо на странице.";
+  $("navigation-options").replaceChildren(...(navigation?.candidates || []).map(candidate => {
+    const row = element("div", null, "nav-option"), description = element("div");
+    description.append(element("strong", `${candidate.label} · ${candidate.confidence}/100${candidate.target_blank ? " · новая вкладка" : ""}`), element("small", candidate.reasons.join(" · ")));
+    const choose = element("button", "Использовать"); choose.disabled = state.run?.status === "running";
+    choose.addEventListener("click", () => { const access = authorizeSelected(); void action(async () => { await access; await send("NAV_CHOOSE", { tab_id: Number($("tab").value), candidate_id: candidate.id }); }); });
+    row.append(description, choose); return row;
+  }));
 }
 async function refresh(dataUpdated = false) {
   if (refreshing) { pendingRefresh = true; pendingData ||= dataUpdated; return; }
@@ -72,6 +87,11 @@ async function refresh(dataUpdated = false) {
     $("collect").disabled = running; $("pause").disabled = !running; $("resume").disabled = !paused; $("show-tab").disabled = !state.run;
     $("enrich-all").disabled = running || !state.count; $("clear").disabled = running || !state.count; $("import").disabled = running;
     $("reparse").disabled = running || !state.raw_count;
+    for (const id of ["pick-card", "pick-next", "reset-profile", "scan-nav"]) $(id).disabled = running;
+    $("resume-tab").disabled = !paused || state.run?.phase === "details";
+    $("finish-search").disabled = !paused || state.run?.phase === "details";
+    $("grant-required").hidden = !state.run?.required_origin || !paused;
+    $("grant-required").textContent = state.run?.required_origin ? `Разрешить ${state.run.required_origin.replace(/^[^:]+:\/\//, "").replace(/\/\*$/, "")} и продолжить` : "Разрешить доступ";
     for (const id of ["export-json", "export-csv", "export-raw"]) $(id).disabled = !state.count;
     $("badge").dataset.state = state.run?.status || "idle";
     $("badge").textContent = running ? "Работаю" : paused ? "Пауза" : state.run?.status === "finished" ? "Завершено" : "Готов к сбору";
@@ -84,16 +104,29 @@ async function refresh(dataUpdated = false) {
     $("warnings").replaceChildren(...state.warnings.map(warning => element("li", warning))); $("warnings").hidden = !state.warnings.length;
     $("log").replaceChildren(...(run?.log?.slice().reverse() || []).map(entry => { const item = element("li"); const time = element("time", new Date(entry.at).toLocaleTimeString("ru-RU")); time.dateTime = entry.at; item.append(time, element("span", entry.message)); return item; }));
     if (!run?.log?.length) $("log").append(element("li", "Работа ещё не запущена.", "muted"));
-    if (dataChanged) renderTable();
+    if (dataChanged) {
+      const selectedSource = $("source-filter").value;
+      const sources = [...new Set(state.products.map(product => product.source))];
+      $("source-filter").replaceChildren(element("option", "Все сайты"), ...sources.map(source => { const option = element("option", source.replace(/^web:/, "")); option.value = source; return option; }));
+      $("source-filter").firstChild.value = ""; $("source-filter").value = sources.includes(selectedSource) ? selectedSource : "";
+      renderTable();
+    }
+    renderNavigation();
   } finally { refreshing = false; if (pendingRefresh) { const full = pendingData; pendingRefresh = false; pendingData = false; void refresh(full).catch(error); } }
 }
 function options() { return { tab_id: Number($("tab").value) || undefined, max_pages: Number($("pages").value), interval_seconds: Number($("interval").value), query: $("query").value, scroll: $("scroll").checked, enrich: $("enrich").checked, raw: $("raw").checked }; }
-$("collect-form").addEventListener("submit", event => { event.preventDefault(); if (!$("tab").value) { error(new Error("Выберите открытую вкладку с выдачей.")); return; } void action(() => send("START", options())); });
+$("collect-form").addEventListener("submit", event => { event.preventDefault(); const access = authorizeSelected(); void action(async () => { await access; await send("START", options()); }); });
 $("enrich-all").addEventListener("click", () => { void action(() => send("ENRICH", options())); });
 $("pause").addEventListener("click", () => { void action(() => send("PAUSE")); });
 $("resume").addEventListener("click", () => { void action(() => send("RESUME", { interval_seconds: Number($("interval").value) })); });
 $("show-tab").addEventListener("click", () => { void action(() => send("SHOW_TAB")); });
 $("refresh-tabs").addEventListener("click", () => { void action(refreshTabs); });
+$("scan-nav").addEventListener("click", () => { const access = authorizeSelected(); void action(async () => { await access; await send("NAV_SCAN", { tab_id: Number($("tab").value) }); }); });
+for (const [id, mode] of [["pick-card", "card"], ["pick-next", "next"]]) $(id).addEventListener("click", () => { const access = authorizeSelected(); void action(async () => { await access; await send("PICK", { tab_id: Number($("tab").value), mode }); }); });
+$("reset-profile").addEventListener("click", () => { void action(() => send("RESET_PROFILE", { tab_id: Number($("tab").value) })); });
+$("resume-tab").addEventListener("click", () => { const access = authorizeSelected(); void action(async () => { await access; await send("RESUME", { tab_id: Number($("tab").value), interval_seconds: Number($("interval").value) }); }); });
+$("grant-required").addEventListener("click", () => { const access = grant(state.run.required_origin); void action(async () => { await access; await send("RESUME", { interval_seconds: Number($("interval").value) }); }); });
+$("finish-search").addEventListener("click", () => { void action(() => send("FINISH_SEARCH")); });
 for (const [id, format] of [["export-json", "json"], ["export-csv", "csv"], ["export-raw", "raw"]]) $(id).addEventListener("click", () => { void action(() => send("EXPORT", { format })); });
 $("filter").addEventListener("input", renderTable); $("source-filter").addEventListener("change", renderTable);
 $("import").addEventListener("click", () => $("import-file").click());
@@ -104,5 +137,5 @@ $("import-file").addEventListener("change", () => { void action(async () => {
 }); });
 $("reparse").addEventListener("click", () => { void action(async () => { const cards = await send("RAW"); const products = SupplierCollectorEngine.reparse(cards); await send("IMPORT", { data: { products } }); }); });
 $("clear").addEventListener("click", () => { if (confirm("Удалить все товары, карточки и журнал? Сначала сохраните экспорт, если данные нужны.")) void action(() => send("CLEAR")); });
-chrome.storage.onChanged.addListener((changes, area) => { if (area === "local" && (changes.collection || changes.run)) void refresh(Boolean(changes.collection)).catch(error); });
+chrome.storage.onChanged.addListener((changes, area) => { if (area === "local" && (changes.collection || changes.run || changes.last_navigation || changes.profiles)) void refresh(Boolean(changes.collection)).catch(error); });
 void action(async () => { await refreshTabs(); await refresh(); });

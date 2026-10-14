@@ -78,7 +78,7 @@ test("native installed extension: pagination, persistent collection, JSON downlo
     }, response.result.download_id, { timeout: 10000 });
     const filename = await popup.evaluate(async id => (await chrome.downloads.search({ id }))[0].filename, response.result.download_id);
     const output = JSON.parse(fs.readFileSync(filename, "utf8"));
-    assert.equal(output.schema_version, 2);
+    assert.equal(output.schema_version, 3);
     assert.equal(output.total_products, 3);
     assert.equal(output.pages.length, 2);
     assert.equal(output.products.find(item => item.product_id === "1002").minimum_order, null);
@@ -97,14 +97,14 @@ test("native installed extension: pagination, persistent collection, JSON downlo
     assert.equal(state.count, 3);
   });
 
-  await t.test("non-marketplace tabs are rejected without clearing existing data", async () => {
+  await t.test("sites without granted access are rejected without clearing existing data", async () => {
     await results.goto("https://example.org/");
     await results.bringToFront();
     // Allow the cancellation of the in-flight content operation to complete.
     await new Promise(resolve => setTimeout(resolve, 700));
     const response = await command("START", { max_pages: 1, scroll: false });
     assert.equal(response.ok, false);
-    assert.match(response.error, /1688/);
+    assert.match(response.error, /доступ/);
     assert.equal((await command("STATE")).result.count, 3);
     assert.equal((await command("CLEAR")).ok, true);
     assert.equal((await command("STATE")).result.count, 0);

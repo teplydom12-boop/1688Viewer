@@ -20,6 +20,8 @@ async function pageFor(t, html = fixture, url = URL) {
     ? route.fulfill({ contentType: "text/html; charset=utf-8", body: html }) : route.abort());
   await page.goto(url);
   await page.addScriptTag({ path: path.join(__dirname, "../extension/shared.js") });
+  await page.addScriptTag({ path: path.join(__dirname, "../extension/navigation.js") });
+  await page.addScriptTag({ path: path.join(__dirname, "../extension/generic.js") });
   await page.addScriptTag({ path: path.join(__dirname, "../extension/engine.js") });
   await page.addScriptTag({ path: path.join(__dirname, "../extension/content.js") });
   return page;

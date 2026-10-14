@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Supplier Viewer — поиск поставщиков",
-  "version": "0.2.0",
-  "description": "Выдача и поставщики 1688, Alibaba и Made-in-China: сбор, проверка карточек, дерево товаров и экспорт.",
-  "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage", "downloads", "alarms"],
+  "version": "0.3.0",
+  "description": "Карточки товаров на разных сайтах: анализ структуры, навигация и новые вкладки, поставщики и экспорт.",
+  "permissions": ["activeTab", "tabs", "scripting", "storage", "unlimitedStorage", "downloads", "alarms"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
   "host_permissions": ["https://*.1688.com/*", "https://1688.com/*", "https://*.alibaba.com/*", "https://alibaba.com/*", "https://*.made-in-china.com/*", "https://made-in-china.com/*"],
   "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'none'; img-src 'self' data:; style-src 'self'" },
   "background": { "service_worker": "background.js" },
@@ -15,7 +16,7 @@
   },
   "content_scripts": [{
     "matches": ["https://*.1688.com/*", "https://1688.com/*", "https://*.alibaba.com/*", "https://alibaba.com/*", "https://*.made-in-china.com/*", "https://made-in-china.com/*"],
-    "js": ["shared.js", "engine.js", "content.js"],
+    "js": ["shared.js", "navigation.js", "generic.js", "engine.js", "content.js"],
     "run_at": "document_idle"
   }]
 }

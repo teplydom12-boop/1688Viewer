@@ -1,6 +1,7 @@
 "use strict";
 const $ = id => document.getElementById(id);
 let initialized = false;
+let activeTab = null;
 
 async function send(type, options) {
   const response = await chrome.runtime.sendMessage({ target: "1688-background", type, options });
@@ -44,10 +45,9 @@ async function refresh() {
   $("warnings").hidden = !state.warnings.length;
   $("preview").replaceChildren(...state.preview.map(product => {
     const item = document.createElement("li");
-    const link = document.createElement("a");
-    link.href = product.product_url;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
+    const hasLink = SupplierCollector.webUrl(product.product_url);
+    const link = document.createElement(hasLink ? "a" : "span");
+    if (hasLink) { link.href = product.product_url; link.target = "_blank"; link.rel = "noopener noreferrer"; }
     link.textContent = product.title || `Товар ${product.product_id}`;
     const description = document.createElement("small");
     description.textContent = [product.price || "Цена не указана", product.shop_name || "Магазин не указан"].join(" · ");
@@ -63,14 +63,15 @@ async function action(operation) {
 
 $("collect-form").addEventListener("submit", event => {
   event.preventDefault();
-  void action(() => send("START", {
+  const access = activeTab && SupplierCollector.webUrl(activeTab.url) && chrome.permissions ? chrome.permissions.request({ origins: [SupplierCollector.originPattern(activeTab.url)] }) : Promise.resolve(true);
+  void action(async () => { if (!await access) throw new Error("Доступ к сайту не разрешён."); return send("START", {
     query: $("query").value,
     max_pages: Number($("pages").value),
     interval_seconds: Number($("interval").value),
     scroll: $("scroll").checked,
     enrich: $("enrich").checked,
     raw: $("raw").checked
-  }));
+  }); });
 });
 $("stop").addEventListener("click", () => { void action(() => send("PAUSE")); });
 $("resume").addEventListener("click", () => { void action(() => send("RESUME", { interval_seconds: Number($("interval").value) })); });
@@ -83,3 +84,4 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && (changes.collection || changes.run)) void refresh().catch(showError);
 });
 void refresh().catch(showError);
+if (chrome.tabs?.query) void chrome.tabs.query({ active: true, currentWindow: true }).then(tabs => { activeTab = tabs[0]; });

@@ -19,11 +19,11 @@ test("background with simulated Chrome APIs collects two real DOM pages and expo
   assert.equal(state.count, 3);
   assert.equal(state.page_count, 2);
   assert.equal(state.run.completed_pages, 2);
-  assert.match(state.run.message, /кнопка/);
+  assert.match(state.run.message, /кнопка/i);
   assert.equal((await h.command("EXPORT")).ok, true);
   const output = JSON.parse(decodeURIComponent(h.downloads[0].url.split(",").slice(1).join(",")));
   assert.equal(output.total_products, 3);
-  assert.equal(output.schema_version, 2);
+  assert.equal(output.schema_version, 3);
   assert.equal(output.pages.length, 2);
   const duplicate = output.products.find(item => item.product_id === "1001");
   assert.equal(duplicate.price, "¥12.50");
@@ -137,7 +137,7 @@ test("legacy JSON import, raw export and CSV retain usable supplier data", async
   assert.match(decodeURIComponent(h.downloads[0].url), /'=1\+1/);
   await h.command("EXPORT", { format: "raw" });
   const raw = JSON.parse(decodeURIComponent(h.downloads[1].url.split(",").slice(1).join(",")));
-  assert.equal(raw.schema_version, 2); assert.ok(Array.isArray(raw.raw_cards)); assert.equal(raw.unresolved_products.length, 1);
+  assert.equal(raw.schema_version, 3); assert.ok(Array.isArray(raw.raw_cards)); assert.equal(raw.unresolved_products.length, 1);
 });
 
 test("the dashboard shows unique suppliers and their product tree, filters products and exposes task history", async t => {
