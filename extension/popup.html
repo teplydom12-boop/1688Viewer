@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>1688 Viewer</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <span class="brand-mark" aria-hidden="true">1688</span>
+    <div><h1>Сбор поставщиков</h1><p>Из выдачи — в один JSON</p></div>
+    <span class="version">0.1</span>
+  </header>
+
+  <main>
+    <div class="intro">Откройте 1688 и выполните поиск по тексту или картинке. Сбор работает в открытой вкладке.</div>
+    <form id="collect-form">
+      <label for="query">Название поиска <span>необязательно</span></label>
+      <input id="query" type="text" maxlength="300" placeholder="Например: термос, фото №1" autocomplete="off">
+      <p class="hint">Без названия текстовый запрос берётся из выдачи. Для поиска по фото можно указать свою метку.</p>
+      <div class="options-row">
+        <div><label for="pages">Страниц за запуск</label><input id="pages" type="number" min="1" max="20" value="1" required></div>
+        <label class="checkbox"><input id="scroll" type="checkbox" checked><span>Догружать товары<br><small>Прокруткой страницы</small></span></label>
+      </div>
+      <div class="action-row"><button id="collect" class="primary" type="submit">Собрать выдачу</button><button id="stop" type="button" disabled>Остановить</button></div>
+    </form>
+
+    <section class="collection" aria-label="Сохранённые данные">
+      <div class="stats"><div><strong id="count">0</strong><span>товаров</span></div><div><strong id="page-count">0</strong><span>страниц собрано</span></div><span id="badge">Готов к сбору</span></div>
+      <p id="status" role="status" aria-live="polite">Результаты сохраняются между запусками.</p>
+      <p id="error" class="error" role="alert" hidden></p>
+      <ul id="warnings" class="warnings" hidden></ul>
+      <ul id="preview" class="preview"></ul>
+      <div class="export-row"><button id="export" type="button" disabled>Скачать JSON</button><button id="clear" class="quiet" type="button" disabled>Очистить</button></div>
+    </section>
+    <p class="footer">Недоступные поля остаются пустыми. Проверку безопасности на 1688 нужно проходить вручную.</p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
