@@ -63,10 +63,11 @@
 
   function quality(result, options, initial = false) {
     const terminal = N.analyze(document, { url: location.href, profile: profile.navigation, pagination: result.diagnostics.pagination || [] }).decision === "exhausted";
-    return S.collectionQuality(result.products, { known_keys: (options.known_fingerprint || "").split(",").filter(Boolean), expected_count: result.diagnostics.expected_page_size || options.expected_count, check_count: options.scroll === true, initial, terminal, page_context: result.diagnostics.page_context, append_mode: options.append_mode === true, allow_repeats: options.allow_repeats === true });
+    const declared = result.diagnostics.expected_page_size;
+    return S.collectionQuality(result.products, { known_keys: (options.known_fingerprint || "").split(",").filter(Boolean), expected_count: declared || options.expected_count, count_basis: declared ? "card-appearances" : options.count_basis, check_count: options.scroll === true, initial, terminal, page_context: result.diagnostics.page_context, append_mode: options.append_mode === true, allow_repeats: options.allow_repeats === true });
   }
   function incomplete(result, coverage) {
-    const error = new Error(`Полнота страницы не подтверждена: найдено ${coverage.observed_count} товаров, новых ${coverage.new_count}, повторных ${coverage.repeated_count}${coverage.expected_count ? `; ориентир ${coverage.expected_count}` : ""}${coverage.reason === "page-mismatch" ? `; адрес страницы ${coverage.url_page ?? "не указан"}, загружена выдача ${coverage.rendered_page ?? "смешанных страниц"}` : ""}. Дождитесь загрузки выдачи и нажмите «Продолжить». Страница не засчитана.`);
+    const error = new Error(`Полнота страницы не подтверждена: найдено ${coverage.observed_count} строк, уникальных товаров ${coverage.unique_id_count}, новых ${coverage.new_count}, ранее встречавшихся ${coverage.repeated_count}${coverage.expected_count ? `; ориентир ${coverage.expected_count} ${coverage.count_basis === "unique-offers" ? "уникальных товаров" : "карточек на странице"}` : ""}${coverage.reason === "page-mismatch" ? `; адрес страницы ${coverage.url_page ?? "не указан"}, загружена выдача ${coverage.rendered_page ?? "смешанных страниц"}` : ""}. Дождитесь загрузки выдачи и нажмите «Продолжить». Страница не засчитана.`);
     error.code = "INCOMPLETE_RESULTS"; error.candidate = result; error.coverage = coverage; return error;
   }
   async function waitForResults(label, previousFingerprint, mode, raw, options = {}) {

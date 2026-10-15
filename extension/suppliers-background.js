@@ -299,7 +299,8 @@ const SupplierStage = (() => {
       supplier_id: row.supplier_conflict ? null : row.supplier.supplier_id, supplier_url: row.supplier_conflict ? null : row.supplier.supplier_url });
     const products = result.products.map(convert);
     return { ...result, exported_at: new Date().toISOString(), total_products: products.length, total_tasks: result.source_tasks.length, products,
-      suppliers: result.suppliers.filter(item => item.status !== "unknown").map(item => ({ ...item, products: item.products.map(convert) })),
+      suppliers: result.suppliers.filter(item => item.status !== "unknown").map(item => ({ ...item, products: item.products.map(convert), excluded_products: (item.excluded_products || []).map(convert) })),
+      excluded_suppliers: result.excluded_suppliers.map(item => ({ ...item, products: item.products.map(convert) })),
       unresolved_products: result.suppliers.filter(item => item.status === "unknown").flatMap(item => item.products.map(convert)), pages: [],
       excluded_products: result.excluded_products.map(convert),
       tasks: result.source_tasks.map(task => ({ ...task, products: products.filter(row => row.source_task_id === task.id), pages: [], log: [] })) };
@@ -312,9 +313,10 @@ const SupplierStage = (() => {
     if (format === "json") body = JSON.stringify(result, null, 2);
     else {
       const escape = value => { let text = String(value ?? ""); if (/^[=+@-]/.test(text.trimStart())) text = "'" + text; return '"' + text.replace(/"/g, '""') + '"'; };
-      const fields = ["Поставщик", "Магазин", "Площадка", "Статус", "Товар", "Карточка", "Задание", "ID наблюдения", "Категория", "Причина отбора", "Цитата"];
-      const lines = result.suppliers.flatMap(supplier => supplier.products.map(row => [supplier.shop_name, supplier.supplier_url, row.source, supplier.status === "unknown" ? C.unknown : "Определён", row.title, row.product_url, row.source_task_name, row.observation_id, R.labels[row.relevance?.status || "unreviewed"], row.relevance?.reason, row.relevance?.evidence]));
-      lines.push(...result.excluded_products.map(row => [row.supplier?.shop_name, row.supplier?.supplier_url, row.source, "Проверка пропущена: не подходит", row.title, row.product_url, row.source_task_name, row.observation_id, R.labels.excluded, row.relevance?.reason, row.relevance?.evidence]));
+      const fields = ["Поставщик", "Магазин", "Площадка", "Статус", "Товар", "Карточка", "Задание", "ID наблюдения", "Категория", "Причина отбора", "Цитата", "Раздел поставщиков"];
+      const lines = result.suppliers.flatMap(supplier => supplier.products.map(row => [supplier.shop_name, supplier.supplier_url, row.source, supplier.status === "unknown" ? C.unknown : "Определён", row.title, row.product_url, row.source_task_name, row.observation_id, R.labels[row.relevance?.status || "unreviewed"], row.relevance?.reason, row.relevance?.evidence, "Основной список"]));
+      const excludedOnly = new Map(result.excluded_suppliers.flatMap(supplier => supplier.products.map(row => [row.stage2_row_id, supplier.status])));
+      lines.push(...result.excluded_products.map(row => [row.supplier?.shop_name, row.supplier?.supplier_url, row.source, "Проверка пропущена: не подходит", row.title, row.product_url, row.source_task_name, row.observation_id, R.labels.excluded, row.relevance?.reason, row.relevance?.evidence, excludedOnly.get(row.stage2_row_id) === "unknown" ? "Поставщик неизвестен: неподходящие карточки" : excludedOnly.has(row.stage2_row_id) ? "Только неподходящие карточки" : "Основной список: неподходящая карточка"]));
       body = "\uFEFF" + [fields, ...lines].map(line => line.map(escape).join(";")).join("\r\n");
     }
     await chrome.downloads.download({ url: "data:" + (format === "json" ? "application/json" : "text/csv") + ";charset=utf-8," + encodeURIComponent(body), filename: "supplier-search-" + job.id + "." + format, saveAs: true });

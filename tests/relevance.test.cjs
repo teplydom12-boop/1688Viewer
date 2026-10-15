@@ -144,6 +144,72 @@ test("supplier reports and detail propagation retain excluded rows separately wi
   assert.equal(result.excluded_products[0].supplier_check, undefined); assert.equal(result.unknown_cards, 0);
 });
 
+test("excluded-only suppliers are retained apart from mixed, uncertain and unreviewed suppliers across sites", () => {
+  const owner = (id, name = id) => ({ supplier_id: id, supplier_url: `https://${id}.1688.com/`, shop_name: name });
+  const j = request(job([
+    row(1, "Electric log splitter", owner("a")), row(2, "Mini excavator A", owner("a")),
+    row(3, "Mini excavator B", owner("b")), row(3, "Mini excavator B", owner("b")),
+    row(4, "Power type unknown", owner("c")), row(5, "Unreviewed tool", owner("d")),
+    row(6, "Mini excavator Alibaba", { source: "alibaba", product_url: "https://www.alibaba.com/product-detail/Tool_100006.html", supplier_id: "a", supplier_url: "https://a.en.alibaba.com/", shop_name: "Alibaba A" }),
+    row(7, "Mini excavator unknown"), row(7, "Mini excavator unknown"), row(8, "Electric log splitter")
+  ]));
+  const decisions = R.payload(j).cards.filter(card => card.title !== "Unreviewed tool").map(card => decision(card.id, card.title.startsWith("Mini excavator") ? "excluded" : card.title === "Power type unknown" ? "uncertain" : "relevant", card.title.startsWith("Mini excavator") ? "Mini excavator" : ""));
+  j.products = R.apply(j, [answer(j, decisions)], criteria, at).products;
+  const original = structuredClone(j), report = C.report(j);
+  assert.equal(report.products.length, 10); assert.equal(report.included_cards, 4); assert.equal(report.excluded_products.length, 6);
+  assert.equal(report.total_suppliers, 3); assert.equal(report.total_excluded_suppliers, 2); assert.equal(report.excluded_unknown_cards, 2);
+  assert.deepEqual(report.suppliers.filter(s => s.status === "identified").map(s => s.supplier_id), ["a", "c", "d"]);
+  assert.deepEqual(report.excluded_suppliers.filter(s => s.status === "identified").map(s => [s.source, s.supplier_id, s.products.length]), [["1688", "b", 2], ["alibaba", "a", 1]]);
+  assert.equal(report.suppliers[0].excluded_products.length, 1); assert.equal(report.excluded_suppliers.at(-1).status, "unknown");
+  assert.equal(report.excluded_suppliers[0].unique_offers, 1); assert.equal(report.excluded_suppliers[0].duplicate_cards, 1); assert.deepEqual(j, original);
+  const bid = R.payload(j).cards.find(card => card.title === "Mini excavator B").id;
+  j.products = R.override(j, bid, "relevant", at); assert.equal(C.report(j).total_suppliers, 4); assert.equal(C.report(j).total_excluded_suppliers, 1);
+  j.products = R.reset(j); assert.equal(C.report(j).excluded_suppliers.length, 0); assert.equal(j.products.length, 10);
+});
+
+test("a storefront alias keeps a mixed supplier in the main list without using equal names as identity", () => {
+  const j = request(job([row(1, "Electric log splitter", { supplier_url: "https://a.1688.com/", shop_name: "Same name" }), row(2, "Mini excavator", { supplier_id: "a", supplier_url: "https://a.1688.com/", shop_name: "Same name" }), row(3, "Mini excavator", { supplier_id: "b", supplier_url: "https://b.1688.com/", shop_name: "Same name" })]));
+  j.products = R.apply(j, [answer(j, [decision("card_000002", "excluded", "Mini excavator")])], criteria, at).products;
+  const r = C.report(j); assert.equal(r.total_suppliers, 1); assert.equal(r.total_excluded_suppliers, 1); assert.equal(r.suppliers[0].supplier_id, "a"); assert.equal(r.excluded_suppliers[0].supplier_id, "b");
+  assert.equal(r.suppliers[0].excluded_products[0].product_id, "2");
+});
+
+async function separatedSuppliers(h) {
+  const active = { supplier_id: "active", supplier_url: "https://active.1688.com/", shop_name: "Active factory" }, rejected = { supplier_id: "rejected", supplier_url: "https://rejected.1688.com/", shop_name: "Rejected factory" };
+  await prepared(h, [row(1001, "Electric log splitter", active), row(1002, "Mini excavator A", active), row(1003, "Mini excavator B", rejected), row(1003, "Mini excavator B", rejected)]);
+  const payload = await exported(h), decisions = payload.cards.map(card => decision(card.id, card.title.startsWith("Mini") ? "excluded" : "relevant", card.title.startsWith("Mini") ? "Mini excavator" : ""));
+  assert.equal((await h.command("RELEVANCE_IMPORT", { criteria, files: [response(payload, decisions)] })).ok, true); return payload;
+}
+
+test("supplier UI separates excluded companies and mixed-company cards, with reversible manual classification", async t => {
+  const h = await createHarness(browser, t); await separatedSuppliers(h); const original = structuredClone(h.data.tasks), page = await ui(h);
+  await page.waitForFunction(() => document.getElementById("supplier-count").textContent === "1");
+  assert.equal(await page.locator(".supplier-name").count(), 1); assert.match(await page.locator(".supplier-name").textContent(), /Active factory/);
+  await page.locator("#category-filter").selectOption("excluded");
+  const only = page.locator('.excluded-supplier-group[data-excluded-only="true"]'), mixed = page.locator('.excluded-supplier-group[data-excluded-only="false"]');
+  assert.equal(await only.count(), 1); assert.match(await only.locator("h3").textContent(), /Rejected factory/); assert.equal(await only.locator(".product-tree tbody tr").count(), 2);
+  assert.equal(await mixed.count(), 1); assert.match(await mixed.locator("h3").textContent(), /Active factory/); assert.equal(await mixed.locator(".product-tree tbody tr").count(), 1);
+  assert.equal(await only.locator('a[href="https://rejected.1688.com/"]').count(), 1);
+  await only.locator(".relevance-choice").first().selectOption("relevant"); await page.waitForFunction(() => document.getElementById("supplier-count").textContent === "2");
+  assert.equal(await page.locator('.excluded-supplier-group[data-excluded-only="true"]').count(), 0);
+  await page.reload(); await page.waitForFunction(() => document.getElementById("supplier-count").textContent === "2"); assert.deepEqual(h.data.tasks, original);
+});
+
+test("JSON and Excel keep excluded-only supplier tables separate and CSV labels their section", async t => {
+  const h = await createHarness(browser, t); await separatedSuppliers(h);
+  await h.command("SUPPLIERS_EXPORT", { format: "json" }); const report = downloaded(h);
+  assert.deepEqual(report.suppliers.map(s => s.supplier_id), ["active"]); assert.deepEqual(report.excluded_suppliers.map(s => s.supplier_id), ["rejected"]); assert.equal(report.products.length, 4);
+  await h.command("SUPPLIERS_EXPORT", { format: "csv" }); const csv = decodeURIComponent(h.downloads.at(-1).url); assert.match(csv, /Раздел поставщиков/); assert.match(csv, /Основной список: неподходящая карточка/); assert.match(csv, /Только неподходящие карточки/);
+  const snapshot = (await h.command("EXCEL_DATA", { stage: 2 })).result, Excel = require("../extension/excel.js"), file = path.join(__dirname, "../test-results/excluded-suppliers.xlsx");
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, Excel.workbook(snapshot));
+  const check = spawnSync("python3", ["-c", [
+    "import sys,zipfile,xml.etree.ElementTree as E", "z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None", "n={'x':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}",
+    "def rows(i):", " return [[c.find('x:is/x:t',n).text if c.find('x:is/x:t',n) is not None else c.findtext('x:v','',n) for c in r.findall('x:c',n)] for r in E.fromstring(z.read('xl/worksheets/sheet%d.xml'%i)).findall('x:sheetData/x:row',n)]",
+    "active,excluded=rows(2),rows(7)", "assert len(active)==2 and active[1][2]=='Active factory'", "assert len(excluded)==2 and excluded[1][2]=='Rejected factory' and excluded[1][4:7]==['2','1','1']",
+    "assert len(rows(1))==5 and len(rows(4))==5 and len(rows(6))==4", "assert dict(rows(5)[1:])['Поставщиков только с неподходящими карточками']=='1'"
+  ].join("\n"), file], { encoding: "utf8" }); assert.equal(check.status, 0, check.stderr);
+});
+
 test("exporting files alone keeps every card eligible and makes no detail-page visits", async t => {
   const h = await createHarness(browser, t); await prepared(h, [row(1001), row(1002, "Mini excavator")]); const original = structuredClone(h.data.tasks);
   const payload = await exported(h); assert.equal(h.tabs.size, 1); assert.equal(h.data.supplier_search.queue.length, 2);
@@ -265,7 +331,7 @@ test("JSON, CSV and Excel retain all selected rows, categories/reasons, excluded
   const file = path.join(__dirname, "../test-results/relevance.xlsx"); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, Excel.workbook(snapshot));
   const check = spawnSync("python3", ["-c", [
     "import sys,zipfile,xml.etree.ElementTree as E", "z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None", "n={'x':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}",
-    "book=E.fromstring(z.read('xl/workbook.xml')); assert [s.attrib['name'] for s in book.find('x:sheets',n)][-1]=='Исключённые карточки'",
+    "book=E.fromstring(z.read('xl/workbook.xml')); assert [s.attrib['name'] for s in book.find('x:sheets',n)][-2:]==['Исключённые карточки','Исключённые поставщики']",
     "def rows(i):", " return [[c.find('x:is/x:t',n).text if c.find('x:is/x:t',n) is not None else c.findtext('x:v','',n) for c in r.findall('x:c',n)] for r in E.fromstring(z.read('xl/worksheets/sheet%d.xml'%i)).findall('x:sheetData/x:row',n)]",
     "p,s,t,tp,summary,excluded=[rows(i) for i in range(1,7)]", "assert len(p)==4 and len(excluded)==3 and len(tp)==4 and len(s)==2",
     "ci=p[0].index('Категория релевантности'); ri=p[0].index('Причина отбора'); assert [r[ci] for r in p[1:]]==['Не оценивалась','Не подходит','Не подходит']",

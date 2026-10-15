@@ -76,6 +76,23 @@ test("select pagination at its final option is terminal", async t => {
   const result = await analyze(t, '<form class="pagination"><select name="page"><option value="1">1</option><option value="2" selected>2</option></select></form>');
   assert.equal(result.decision, "exhausted");
 });
+test("a final numbered page and a one-page pager can finish without a next button", async t => {
+  const last = await analyze(t, '<nav class="pagination"><a href="?page=1">1</a><a href="?page=2">2</a><span aria-current="page">3</span></nav>', "https://catalog.example/catalog?page=3");
+  assert.equal(last.decision, "exhausted"); assert.equal(last.candidates.length, 0);
+  const one = await analyze(t, '<nav class="pagination" data-total-pages="1"><span aria-current="page">1</span></nav>');
+  assert.equal(one.decision, "exhausted");
+  const nested = await analyze(t, '<ul class="pagination"><li class="pagination-item"><a href="?page=1">1</a></li><li class="pagination-item active"><span aria-current="page">2</span></li></ul>', "https://catalog.example/catalog?page=2");
+  assert.equal(nested.decision, "exhausted");
+});
+test("a disabled standalone load-more control confirms the end of results", async t => {
+  assert.equal((await analyze(t, '<button disabled>Load more</button>')).decision, "exhausted");
+});
+test("missing navigation, ellipses and an active continuation are not mistaken for the last page", async t => {
+  assert.equal((await analyze(t, '<p>Products</p>')).decision, "missing");
+  assert.equal((await analyze(t, '<div class="gallery"><nav class="pagination"><span>1</span><span aria-current="page">2</span></nav></div>')).decision, "missing");
+  assert.equal((await analyze(t, '<nav class="pagination"><a href="?page=1">1</a><span aria-current="page">3</span><span>…</span></nav>', "https://catalog.example/catalog?page=3")).decision, "missing");
+  assert.equal((await analyze(t, '<nav class="pagination"><a href="?page=1">1</a><span aria-current="page">3</span><a rel="next" href="?page=4">Next page</a></nav>', "https://catalog.example/catalog?page=3")).decision, "automatic");
+});
 test("an exact window.open literal exposes its destination without running JavaScript", async t => {
   const result = await analyze(t, '<button aria-label="Next page" onclick="window.open(\'?page=2\', \'_blank\')">Next</button>');
   assert.equal(result.chosen.target_blank, true); assert.match(result.chosen.href, /page=2$/);

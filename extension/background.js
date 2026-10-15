@@ -195,7 +195,8 @@ async function saveSearch(id, result, partial = false) {
     if (run?.id !== id || (!partial && run.status !== "running")) return null;
     if (!partial) {
       const known = run.seen_fingerprints.flatMap(value => value.split(",").filter(Boolean));
-      const coverage = S.collectionQuality(result.products, { known_keys: known, expected_count: result.page.diagnostics?.expected_page_size || run.previous_card_count || run.previous_fingerprint?.split(",").length, check_count: run.scroll, terminal: result.page.diagnostics?.collection_quality?.terminal, page_context: result.page.diagnostics?.page_context, append_mode: run.collection_mode === "append", allow_repeats: run.allow_repeats === true });
+      const declared = result.page.diagnostics?.expected_page_size;
+      const coverage = S.collectionQuality(result.products, { known_keys: known, expected_count: declared || run.previous_unique_count || run.previous_fingerprint?.split(",").filter(Boolean).length, count_basis: declared ? "card-appearances" : "unique-offers", check_count: run.scroll, terminal: result.page.diagnostics?.collection_quality?.terminal, page_context: result.page.diagnostics?.page_context, append_mode: run.collection_mode === "append", allow_repeats: run.allow_repeats === true });
       if (!coverage.complete) {
         const error = new Error(`Страница не засчитана: найдено ${coverage.observed_count}, новых ${coverage.new_count}, повторных ${coverage.repeated_count}. Дождитесь загрузки выдачи и нажмите «Продолжить».`);
         error.code = "INCOMPLETE_RESULTS";
@@ -203,7 +204,7 @@ async function saveSearch(id, result, partial = false) {
         throw error;
       }
     }
-    const checkpoint = `${id}:${run.completed_pages}`, observedCount = result.products.length;
+    const checkpoint = `${id}:${run.completed_pages}`, observedCount = result.products.length, observedUniqueCount = new Set(result.products.map(productKey)).size;
     let incoming = result.products;
     if (run.collection_mode === "append") {
       const priorSlots = new Set(collection.products.filter(item => item.task_id === id && item.checkpoint_id !== checkpoint && S.canonicalUrl(item.source_page_url) === S.canonicalUrl(result.page.page_url)).map(item => item.page_card_key));
@@ -219,7 +220,7 @@ async function saveSearch(id, result, partial = false) {
     const merged = mergeResult(collection, result, partial, checkpoint);
     const keys = [...new Set([...(run.product_keys || []), ...result.products.map(productKey)])];
     let next = { ...run, product_keys: keys };
-    if (!partial) next = logEntry({ ...next, completed_pages: run.completed_pages + 1, previous_fingerprint: result.page.fingerprint, previous_card_count: observedCount, previous_signature: result.page.diagnostics?.content_signature, previous_page_context: result.page.diagnostics?.page_context, previous_document_id: result.page.diagnostics?.document_id, last_page_url: result.page.page_url, seen_fingerprints: [...run.seen_fingerprints, result.page.fingerprint], phase: "navigate", allow_repeats: false }, "saved", `Сохранена страница ${run.completed_pages + 1}: ${result.products.length} карточек. В задании: ${merged.products.filter(item => item.task_id === id || item.task_ids?.includes(id)).length}. В общей памяти: ${merged.products.length}. Повторы сохранены.`);
+    if (!partial) next = logEntry({ ...next, completed_pages: run.completed_pages + 1, previous_fingerprint: result.page.fingerprint, previous_card_count: observedCount, previous_unique_count: observedUniqueCount, previous_signature: result.page.diagnostics?.content_signature, previous_page_context: result.page.diagnostics?.page_context, previous_document_id: result.page.diagnostics?.document_id, last_page_url: result.page.page_url, seen_fingerprints: [...run.seen_fingerprints, result.page.fingerprint], phase: "navigate", allow_repeats: false }, "saved", `Сохранена страница ${run.completed_pages + 1}: ${result.products.length} карточек. В задании: ${merged.products.filter(item => item.task_id === id || item.task_ids?.includes(id)).length}. В общей памяти: ${merged.products.length}. Повторы сохранены.`);
     await persistState({ collection: merged, run: next }, result, partial);
     return { run: next, count: merged.products.length };
   });
@@ -333,7 +334,7 @@ async function navigateStep(run) {
   const selected = run.chosen_navigation ? navigation.candidates.find(item => item.id === run.chosen_navigation) : navigation.chosen;
   await updateRun(run.id, current => ({ ...current, navigation }));
   if (!selected) {
-    if (navigation.decision === "exhausted") { await beginDetails(run.id, "Кнопка следующей страницы отключена: доступная выдача закончилась."); return; }
+    if (navigation.decision === "exhausted") { await beginDetails(run.id, `Доступная выдача закончилась. Собрано страниц: ${run.completed_pages}; заданный предел: ${run.max_pages}.`); return; }
     await finish(run.id, "paused", navigation.candidates.length ? "Есть несколько вариантов перелистывания. Проверьте варианты навигации или укажите кнопку на странице." : "Кнопка перелистывания не найдена уверенно. Укажите её на странице или продолжите в другой вкладке.", "navigation-choice"); return;
   }
   if (selected.href) await ensureAccess(selected.href);
@@ -366,7 +367,7 @@ async function processRun() {
     }
     await waitForTab(run.tab_id, id);
     const tab = await chrome.tabs.get(run.tab_id);
-    const result = await sendToTab(run.tab_id, "COLLECT", { query: run.query, scroll: run.scroll, raw: run.raw, profile: await siteProfile(tab.url), previousFingerprint: run.previous_fingerprint, previous_url: run.last_page_url, previous_page_context: run.previous_page_context, previous_document_id: run.previous_document_id, allow_repeats: run.allow_repeats === true, known_fingerprint: run.seen_fingerprints.join(","), expected_count: run.previous_card_count || run.previous_fingerprint?.split(",").length || null, append_mode: run.collection_mode === "append", scroll_delay: run.interval_ms >= 5000 ? 1000 : 650 });
+    const result = await sendToTab(run.tab_id, "COLLECT", { query: run.query, scroll: run.scroll, raw: run.raw, profile: await siteProfile(tab.url), previousFingerprint: run.previous_fingerprint, previous_url: run.last_page_url, previous_page_context: run.previous_page_context, previous_document_id: run.previous_document_id, allow_repeats: run.allow_repeats === true, known_fingerprint: run.seen_fingerprints.join(","), expected_count: run.previous_unique_count || run.previous_fingerprint?.split(",").filter(Boolean).length || null, count_basis: "unique-offers", append_mode: run.collection_mode === "append", scroll_delay: run.interval_ms >= 5000 ? 1000 : 650 });
     const saved = await saveSearch(id, result); if (!saved) return;
     if (saved.run.completed_pages >= saved.run.max_pages) await beginDetails(id);
   } catch (error) {

@@ -21,14 +21,19 @@ async function openExport(t, options = {}) {
   let output = options.output || snapshot([product("1001", "https://images.test/ok.png"), product("1002", "https://images.test/missing.png"), product("1003", "https://images.test/ok.png"), product("1004", null)]);
   await page.exposeFunction("__snapshot", message => { if (message.type === "SET_VIEW") { preferences.push(message.options); return { ok: true, result: {} }; } return { ok: true, result: output }; });
   await page.exposeFunction("__permission", origins => { permissions.push(origins); return options.permission !== false; });
-  await page.exposeFunction("__download", value => downloads.push({ ...value, bytes: Buffer.from(value.bytes) }));
+  await page.exposeFunction("__download", value => downloads.push({ ...value, bytes: Buffer.from(value.base64, "base64") }));
   await page.addInitScript(() => {
     const blobs = new Map(), create = URL.createObjectURL.bind(URL);
     URL.createObjectURL = blob => { const url = create(blob); blobs.set(url, blob); return url; };
     window.chrome = {
       runtime: { sendMessage: message => __snapshot(message) },
       permissions: { contains: async () => false, request: ({ origins }) => __permission(origins) },
-      downloads: { download: async info => { const bytes = Array.from(new Uint8Array(await blobs.get(info.url).arrayBuffer())); await __download({ ...info, bytes }); return 1; } }
+      // Transport the actual blob compactly; serializing a number per byte
+      // can exhaust the test deadline for large JPEG workbooks under load.
+      downloads: { download: async info => {
+        const data = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(reader.error); reader.readAsDataURL(blobs.get(info.url)); });
+        await __download({ ...info, base64: data.slice(data.indexOf(",") + 1) }); return 1;
+      } }
     };
   });
   const csp = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"))).content_security_policy.extension_pages;

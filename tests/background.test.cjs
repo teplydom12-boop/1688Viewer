@@ -19,7 +19,8 @@ test("background with simulated Chrome APIs collects two real DOM pages and expo
   assert.equal(state.count, 4);
   assert.equal(state.page_count, 2);
   assert.equal(state.run.completed_pages, 2);
-  assert.match(state.run.message, /кнопка/i);
+  assert.match(state.run.message, /выдача закончилась/i);
+  assert.match(state.run.message, /Собрано страниц: 2; заданный предел: 3/);
   assert.equal((await h.command("EXPORT")).ok, true);
   const output = JSON.parse(decodeURIComponent(h.downloads[0].url.split(",").slice(1).join(",")));
   assert.equal(output.total_products, 4);

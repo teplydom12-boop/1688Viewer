@@ -112,7 +112,7 @@ function productTree(products, images) {
 function renderResult() {
   const result = state.result, term = $("filter").value.trim().toLowerCase(), category = $("category-filter").value, images = new Map([...$("suppliers").querySelectorAll("[data-image-key]")].map(node => [node.dataset.imageKey, node]));
   const matchesCategory = product => !category || (product.relevance?.status || "unreviewed") === category;
-  const matchesProduct = product => [product.title, product.product_id, product.source_task_name, site(product.source)].some(value => String(value || "").toLowerCase().includes(term));
+  const matchesProduct = product => [product.title, product.product_id, product.source_task_name, site(product.source), product.supplier?.shop_name, product.supplier?.supplier_id, product.supplier?.supplier_url].some(value => String(value || "").toLowerCase().includes(term));
   const rows = [];
   for (const supplier of result?.suppliers || []) {
     const supplierMatches = [supplier.shop_name, supplier.supplier_id, supplier.supplier_url, site(supplier.source)].some(value => String(value || "").toLowerCase().includes(term));
@@ -129,11 +129,25 @@ function renderResult() {
   if (excluded.length) {
     const open = expanded.has("__excluded__"), row = el("tr", null, "excluded-category"), cell = el("td"), button = el("button", (open ? "▾ " : "▸ ") + "Не подходят — проверка пропущена · " + excluded.length + " карточек"); cell.colSpan = 6;
     button.addEventListener("click", () => { if (expanded.has("__excluded__")) expanded.delete("__excluded__"); else expanded.add("__excluded__"); renderResult(); }); cell.append(button); row.append(cell); rows.push(row);
-    if (open) { const child = el("tr", null, "tree-row excluded-category"), inner = el("td"); inner.colSpan = 6; inner.append(productTree(excluded, images)); child.append(inner); rows.push(child); }
+    if (open) {
+      const child = el("tr", null, "tree-row excluded-category"), inner = el("td"); inner.colSpan = 6;
+      const visible = new Set(excluded.map(product => product.stage2_row_id));
+      const groups = [...(result.excluded_suppliers || []).map(supplier => ({ ...supplier, excludedOnly: true })), ...result.suppliers.filter(supplier => supplier.excluded_products?.length).map(supplier => ({ ...supplier, products: supplier.excluded_products, excludedOnly: false }))];
+      for (const supplier of groups) {
+        const products = supplier.products.filter(product => visible.has(product.stage2_row_id)); if (!products.length) continue;
+        const group = el("section", null, "excluded-supplier-group"); group.dataset.supplierKey = supplier.key; group.dataset.excludedOnly = String(supplier.excludedOnly);
+        group.append(el("h3", supplier.shop_name), el("p", supplier.status === "unknown" ? "Продавцы этих неподходящих карточек не определены. Группа не считается одной компанией." : supplier.excludedOnly ? "Только неподходящие карточки — поставщик исключён из основного списка." : "У поставщика есть включённые карточки в основном списке; здесь сохранены его неподходящие товары.", "muted"));
+        if (supplier.supplier_url) group.append(link(supplier.supplier_url, "Открыть магазин ↗"));
+        group.append(productTree(products, images)); inner.append(group);
+      }
+      child.append(inner); rows.push(child);
+    }
   }
   $("suppliers").replaceChildren(...rows); $("empty").hidden = Boolean(rows.length);
   $("supplier-count").textContent = result?.total_suppliers || 0; $("card-count").textContent = result?.total_cards || 0; $("unknown-count").textContent = result?.unknown_cards || 0; $("task-count").textContent = result?.source_tasks.length || 0;
   $("unique-count").textContent = result?.unique_offers || 0; $("repeat-count").textContent = result?.duplicate_cards || 0;
+  $("excluded-supplier-note").hidden = !result?.relevance.request_id;
+  $("excluded-supplier-note").textContent = `Поставщиков только с неподходящими карточками: ${result?.total_excluded_suppliers || 0}. Они сохранены отдельно в категории «Не подходят» и не входят в основной счётчик поставщиков. Сомнительные и неоценённые карточки остаются включёнными.`;
   $("unique-note").textContent = `Уникальность определяется по площадке и ID предложения, при отсутствии ID — по ссылке; на обычных сайтах — по полной ссылке с вариантом товара. Без ID и ссылки строки считаются отдельными. Все появления сохраняются.${result ? ` В проверку включено ${result.included_cards} карточек; не подходят: ${result.excluded_products.length}. Среди включённых карточек без поставщика уникальных: ${result.unknown_unique_offers}.` : ""}`;
   $("result-state").textContent = !result ? "Результат ещё не подготовлен" : state.job.status === "finished" ? "Итоговый результат" : "Предварительный результат · уточнение ещё не завершено";
 }

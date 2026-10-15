@@ -192,13 +192,14 @@
     const fresh = [...observed].filter(key => !known.has(key)).length;
     const expected = Math.max(0, Number(options.expected_count) || 0);
     const repeated = observed.size - fresh;
+    const counted = options.count_basis === "unique-offers" ? observed.size : products.length;
     const context = options.page_context || {};
     const verifiedPage = context.rendered_page != null && !context.mismatch && !context.mixed && (context.url_page == null || context.url_page === context.rendered_page);
     const stale = !options.allow_repeats && !verifiedPage && !options.append_mode && known.size >= 12 && observed.size >= 12 && repeated / observed.size >= 0.9 && fresh <= Math.max(1, Math.floor(observed.size * 0.1));
     const minimum = options.initial ? Math.min(12, Math.ceil(expected * 0.2)) : Math.ceil(expected * 0.9);
-    const short = options.check_count && !options.terminal && expected >= 12 && products.length < minimum;
+    const short = options.check_count && !options.terminal && expected >= 12 && counted < minimum;
     const mismatched = !options.append_mode && (context.mismatch || context.mixed);
-    return { complete: !stale && !short && !mismatched, observed_count: products.length, unique_id_count: observed.size, new_count: fresh, repeated_count: repeated, expected_count: expected || null, terminal: Boolean(options.terminal), url_page: context.url_page ?? null, rendered_page: context.rendered_page ?? null, reason: mismatched ? "page-mismatch" : stale ? "stale-results" : short ? "short-results" : null };
+    return { complete: !stale && !short && !mismatched, observed_count: products.length, unique_id_count: observed.size, new_count: fresh, repeated_count: repeated, expected_count: expected || null, count_basis: options.count_basis || "card-appearances", terminal: Boolean(options.terminal), url_page: context.url_page ?? null, rendered_page: context.rendered_page ?? null, reason: mismatched ? "page-mismatch" : stale ? "stale-results" : short ? "short-results" : null };
   }
 
   function supplierGroups(products) {

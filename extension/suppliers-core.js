@@ -123,23 +123,29 @@
     return rows;
   }
   function report(job) {
-    const rows = job.products, byUrl = aliases(rows), groups = new Map(), unresolved = [];
+    const rows = job.products, byUrl = aliases(rows), groups = new Map(), rejected = new Map(), unresolved = [], excludedUnknown = [];
     for (const row of rows) {
-      if (excluded(row)) continue;
       const key = !row.supplier_conflict && identity(row.supplier, byUrl);
-      if (!key) { unresolved.push(row); continue; }
-      if (!groups.has(key)) groups.set(key, { key, source: row.supplier.source, supplier_id: row.supplier.supplier_id, shop_name: row.supplier.shop_name || (row.supplier.supplier_url ? new URL(row.supplier.supplier_url).hostname : "Поставщик " + row.supplier.supplier_id), supplier_url: row.supplier.supplier_url, status: "identified", products: [] });
-      groups.get(key).products.push(row);
+      if (!key) { (excluded(row) ? excludedUnknown : unresolved).push(row); continue; }
+      const target = excluded(row) ? rejected : groups;
+      if (!target.has(key)) target.set(key, { key, source: row.supplier.source, supplier_id: row.supplier.supplier_id, shop_name: row.supplier.shop_name || (row.supplier.supplier_url ? new URL(row.supplier.supplier_url).hostname : "Поставщик " + row.supplier.supplier_id), supplier_url: row.supplier.supplier_url, status: "identified", products: [] });
+      target.get(key).products.push(row);
     }
+    // A supplier belongs to the excluded list only when every found card is
+    // excluded. Mixed suppliers remain active, with their rejected cards kept.
+    const excludedSuppliers = [...rejected.values()].filter(group => !groups.has(group.key)), excludedSupplierCount = excludedSuppliers.length;
+    for (const group of groups.values()) group.excluded_products = rejected.get(group.key)?.products || [];
     const suppliers = [...groups.values()];
     if (unresolved.length) suppliers.push({ key: "unknown", source: null, supplier_id: null, shop_name: unknown, supplier_url: null, status: "unknown", products: unresolved });
+    if (excludedUnknown.length) excludedSuppliers.push({ key: "unknown", source: null, supplier_id: null, shop_name: unknown, supplier_url: null, status: "unknown", products: excludedUnknown });
     const unique = products => new Set(products.map(offerKey)).size;
-    for (const supplier of suppliers) { supplier.unique_offers = unique(supplier.products); supplier.duplicate_cards = supplier.products.length - supplier.unique_offers; }
+    for (const supplier of [...suppliers, ...excludedSuppliers]) { supplier.unique_offers = unique(supplier.products); supplier.duplicate_cards = supplier.products.length - supplier.unique_offers; }
     const uniqueOffers = unique(rows);
     return { schema_version: 1, report_type: "supplier_search", job_id: job.id, status: job.status, started_at: job.started_at, finished_at: job.finished_at || null,
       source_tasks: job.source_tasks, sources: [...new Set(rows.map(source))], total_cards: rows.length, unique_offers: uniqueOffers, duplicate_cards: rows.length - uniqueOffers,
       total_suppliers: groups.size, unknown_cards: unresolved.length, unknown_unique_offers: unique(unresolved), card_checks: { planned: job.queue.length, opened: job.opened_keys.length, checked: job.checked_count, processed: job.cursor, skipped: job.skipped_count || 0 },
-      suppliers, products: rows, excluded_products: rows.filter(excluded), included_cards: rows.filter(row => !excluded(row)).length,
+      suppliers, excluded_suppliers: excludedSuppliers, total_excluded_suppliers: excludedSupplierCount, excluded_unknown_cards: excludedUnknown.length,
+      products: rows, excluded_products: rows.filter(excluded), included_cards: rows.filter(row => !excluded(row)).length,
       relevance: { request_id: job.relevance?.request_id || null, analysis_unit: job.relevance ? job.relevance.analysis_unit || "offer" : null, criteria: job.relevance?.criteria || null, categories: relevanceSummary(rows) }, scope: "only_cards_from_selected_tasks" };
   }
   const api = { unknown, excluded, relevanceSummary, offerKey, evidence, identified, complete, rowsFromTasks, queue, reuse, needsCheck, matchDetail, applyDetail, report };

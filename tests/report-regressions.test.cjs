@@ -27,6 +27,63 @@ test("coverage distinguishes a stale mixed page, a short loading page, ordinary 
   assert.equal(S.collectionQuality([...old.slice(0, 2), ...Array.from({ length: 58 }, (_, i) => ({ source: "1688", product_id: String(300000 + i) }))], options).complete, true);
 });
 
+test("historical completeness compares unique offers while declared page size can count repeated cards", () => {
+  const repeated = Array.from({ length: 193 }, (_, i) => ({ source: "alibaba", product_id: String(i % 60) }));
+  const quality = S.collectionQuality(repeated, { expected_count: 60, count_basis: "unique-offers", check_count: true });
+  assert.equal(quality.complete, true); assert.equal(quality.unique_id_count, 60); assert.equal(quality.observed_count, 193);
+  assert.equal(S.collectionQuality(repeated, { expected_count: 251, check_count: true }).reason, "short-results");
+  assert.equal(S.collectionQuality(repeated.slice(0, 1), { expected_count: 60, count_basis: "unique-offers", check_count: true }).reason, "short-results");
+  assert.equal(S.collectionQuality(Array(60).fill(repeated[0]), { expected_count: 60, count_basis: "card-appearances", check_count: true }).complete, true);
+});
+
+const markets = [
+  ["1688", "https://s.1688.com/selloffer/offer_search.htm", id => `https://detail.1688.com/offer/${id}.html`],
+  ["alibaba", "https://www.alibaba.com/trade/search", id => `https://www.alibaba.com/product-detail/Tool_${id}.html`],
+  ["made-in-china", "https://www.made-in-china.com/products-search/hot-china-products/Tool.html", id => `https://factory.en.made-in-china.com/product/A${id}/China-Tool.html`]
+];
+function repeatedCards(start, count, makeUrl) {
+  return '<div class="grid">' + Array.from({ length: count }, (_, index) => { const id = start + index % 60; return `<article class="offer-card"><a class="offer-title" href="${makeUrl(id)}">Tool ${id}</a><span class="price">¥12</span></article>`; }).join("") + '</div>';
+}
+const compact = layout + '<style>.offer-card{height:18px}</style>';
+for (const [site, base, makeUrl] of markets) {
+  test(`${site}: changing duplicate appearance counts do not make the following complete page fail`, async t => {
+    const h = await createHarness(browser, t);
+    h.flags.routeHtml = url => compact + repeatedCards(url.searchParams.get("page") === "2" ? 200000 : 100000, url.searchParams.get("page") === "2" ? 193 : 251, makeUrl) + `<nav class="pagination"><a rel="next" href="?page=${Number(url.searchParams.get("page")) + 1}">Next page</a></nav>`;
+    await h.page.goto(base + "?page=1"); assert.equal((await h.command("START", { max_pages: 2, scroll: true, raw: false, interval_seconds: 1 })).ok, true);
+    await h.waitFor(d => d.run?.status === "finished", 45000); await h.waitFor(() => h.idle());
+    assert.equal(h.data.run.completed_pages, 2); assert.equal(h.data.collection.products.length, 444); assert.equal(h.data.run.previous_unique_count, 60);
+    const q = h.data.collection.pages[1].diagnostics.collection_quality; assert.equal(q.unique_id_count, 60); assert.equal(q.expected_count, 60); assert.equal(q.count_basis, "unique-offers");
+  });
+  test(`${site}: a short final numbered page finishes an oversized page request normally`, async t => {
+    const h = await createHarness(browser, t);
+    h.flags.routeHtml = url => compact + repeatedCards(url.searchParams.get("page") === "2" ? 200000 : 100000, url.searchParams.get("page") === "2" ? 5 : 60, makeUrl) + (url.searchParams.get("page") === "2" ? '<nav class="pagination"><a href="?page=1">1</a><span aria-current="page">2</span></nav>' : '<nav class="pagination"><span aria-current="page">1</span><a rel="next" href="?page=2">2</a></nav>');
+    await h.page.goto(base + "?page=1"); assert.equal((await h.command("START", { max_pages: 10, scroll: true, raw: false, interval_seconds: 1 })).ok, true);
+    await h.waitFor(d => d.run?.status === "finished", 30000); await h.waitFor(() => h.idle());
+    assert.equal(h.data.run.completed_pages, 2); assert.equal(h.data.run.max_pages, 10); assert.equal(h.data.collection.products.length, 65);
+    assert.match(h.data.run.message, /выдача закончилась/); assert.equal(h.data.collection.pages[1].diagnostics.collection_quality.terminal, true);
+    assert.match(h.page.url(), /page=2$/);
+  });
+}
+
+test("a paused legacy task ignores inflated previous appearance counts when resumed", async t => {
+  const h = await createHarness(browser, t), makeUrl = markets[0][2];
+  h.flags.routeHtml = url => compact + repeatedCards(url.searchParams.get("page") === "2" ? 200000 : 100000, url.searchParams.get("page") === "2" ? 60 : 251, makeUrl) + '<nav class="pagination"><a rel="next" href="?page=3">Next page</a></nav>';
+  await h.page.goto(markets[0][1] + "?page=1"); await h.command("START", { max_pages: 1, scroll: true, raw: false });
+  await h.waitFor(d => d.run?.status === "finished", 30000); await h.waitFor(() => h.idle());
+  delete h.data.run.previous_unique_count; Object.assign(h.data.run, { max_pages: 2, status: "paused", phase: "search", pause_reason: "incomplete-results" });
+  assert.equal(h.data.run.previous_card_count, 251); await h.page.goto(markets[0][1] + "?page=2");
+  assert.equal((await h.command("RESUME")).ok, true); await h.waitFor(d => d.run?.status === "finished", 30000); await h.waitFor(() => h.idle());
+  assert.equal(h.data.run.completed_pages, 2); assert.equal(h.data.collection.products.length, 311); assert.equal(h.data.run.previous_unique_count, 60);
+});
+
+test("a disabled load-more button ends a task before its requested page limit", async t => {
+  const h = await createHarness(browser, t);
+  h.flags.routeHtml = () => layout + `<div class="grid">${cards(100000, 60)}</div><button id="more">Load more</button><script>document.getElementById('more').onclick=()=>{document.querySelector('.grid').insertAdjacentHTML('beforeend',${JSON.stringify(cards(200000, 1))});document.getElementById('more').disabled=true;};</script>`;
+  await h.page.goto("https://s.1688.com/selloffer/offer_search.htm?page=1"); await h.command("START", { max_pages: 10, scroll: false, interval_seconds: 1 });
+  await h.waitFor(d => d.run?.status === "finished", 30000); await h.waitFor(() => h.idle());
+  assert.equal(h.data.run.completed_pages, 2); assert.equal(h.data.collection.products.length, 61); assert.equal(h.data.run.previous_unique_count, 61);
+});
+
 test("an explicit load-more action on the same URL accepts a small append to a large existing list", async t => {
   const h = await createHarness(browser, t);
   h.flags.routeHtml = () => layout + `<div class="grid">${cards(100000, 60)}</div><button id="more">Load more</button><script>document.getElementById('more').onclick=()=>{document.querySelector('.grid').insertAdjacentHTML('beforeend',${JSON.stringify(cards(200000, 1))});document.getElementById('more').disabled=true;};</script>`;

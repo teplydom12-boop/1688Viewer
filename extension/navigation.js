@@ -155,6 +155,25 @@
     const old = before.pathname.match(/\/page\/(\d+)/i), next = after.pathname.match(/\/page\/(\d+)/i);
     return Boolean(next && Number(next[1]) === Number(old?.[1] || 1) + 1);
   }
+  function lastNumberedPage(doc, options) {
+    for (const scope of scopes(doc)) for (const marker of scope.querySelectorAll('[aria-current="page"],[aria-selected="true"],[class*="active"],[class*="current"],[class*="selected"]')) {
+      if (!visible(marker, options.snapshot) || marker.closest('[aria-busy="true"],[aria-roledescription="carousel"],[class*="carousel"],[class*="slider"],[class*="gallery"]') || !/^\d+$/.test((marker.textContent || "").trim())) continue;
+      let context = contextFor(marker);
+      for (let parent = context?.parentElement, depth = 0; parent && depth < 5; parent = parent.parentElement, depth++) {
+        if (pagingClass.test(parent.getAttribute("class") || "") || /pagination|пагинац|страниц/i.test(parent.getAttribute("aria-label") || "")) context = parent;
+      }
+      const current = Number(marker.textContent.trim());
+      if (!context || !current || context.querySelector('[aria-busy="true"]')) continue;
+      const numbers = [...context.querySelectorAll('a,button,span,li,[role="button"]')].filter(node => !node.children.length && visible(node, options.snapshot)).map(node => (node.textContent || "").trim()).filter(value => /^\d+$/.test(value)).map(Number);
+      if (numbers.some(number => number > current)) continue;
+      const total = Number(context.getAttribute("data-total-pages") || context.getAttribute("data-page-count"));
+      if (total > 0) { if (current === total) return true; continue; }
+      if (/[.…⋯]/.test(context.textContent || "")) continue;
+      const known = new Set(numbers.filter(number => number >= 1));
+      if (current > 1 && known.has(1) && known.size === current && Math.max(...known) === current) return true;
+    }
+    return false;
+  }
   function analyze(doc, options = {}) {
     const base = options.url || doc.location.href;
     const candidates = [], disabledNext = [];
@@ -202,7 +221,7 @@
         if (learned?.selector === selector && (!learned.label || learned.label === label) && (!/^\d+$/.test(ownText) || current === null || Number(ownText) === current + 1)) add(110, "Ранее выбрана пользователем для этого сайта");
         if (score < 45 || context && score === 35) continue;
         const item = { id: S.digest(selector + label + (href || "")), selector, label, href, target_blank: node.getAttribute("target") === "_blank" || Boolean(opener), kind, score, confidence: Math.min(100, score), reasons, node, context_url: nodeBase };
-        if (disabled(node)) { if (context && (NEXT_PAGE.test(accessible) || NEXT.test(label) || /next/i.test(classes))) disabledNext.push(item); continue; }
+        if (disabled(node)) { if (kind === "load-more" || rel || NEXT_PAGE.test(accessible) || context && (NEXT.test(label) || /next/i.test(classes))) disabledNext.push(item); continue; }
         if (node.getAttribute("aria-current") === "page") continue;
         candidates.push(item);
       }
@@ -229,7 +248,7 @@
     const sameDestination = first?.href && first.href === second?.href;
     const automatic = first && first.score >= 85 && (!second || first.score - second.score >= 15 || sameDestination);
     const flags = (options.pagination || []).map(item => item.hasNextPage).filter(value => typeof value === "boolean");
-    const terminal = disabledNext.length || flags.length && flags.every(value => value === false);
+    const terminal = disabledNext.length || flags.length && flags.every(value => value === false) || !flags.includes(true) && lastNumberedPage(doc, options);
     return { decision: automatic ? "automatic" : unique.length ? "ambiguous" : terminal ? "exhausted" : "missing", candidates: unique.slice(0, 12), chosen: automatic ? first : null };
   }
   const publicResult = result => ({ ...result, candidates: result.candidates.map(({ node, ...item }) => item), chosen: result.chosen ? (({ node, ...item }) => item)(result.chosen) : null });

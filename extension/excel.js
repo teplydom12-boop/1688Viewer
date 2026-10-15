@@ -108,7 +108,11 @@
       const summary = sheets.find(([name]) => name === "Сводка этапа 2")[1];
       summary.push(["Карточек участвует в проверке", output.included_cards], ["Искомый товар", output.relevance.criteria || "Отбор не применялся"]);
       for (const [status, counts] of Object.entries(output.relevance.categories)) summary.push([categoryLabels[status] + ": карточек", counts.cards], [categoryLabels[status] + ": уникальных", counts.unique_offers]);
-      if (output.relevance.request_id) sheets.push(["Исключённые карточки", [titles, ...(output.excluded_products || []).map(productRow)], photos ? 1 : null, output.excluded_products || []]);
+      if (output.relevance.request_id) {
+        sheets.push(["Исключённые карточки", [titles, ...(output.excluded_products || []).map(productRow)], photos ? 1 : null, output.excluded_products || []]);
+        sheets.push(["Исключённые поставщики", [["Сайт-источник", "ID поставщика", "Магазин", "Ссылка", "Всего карточек", "Уникальных карточек", "Повторных появлений", "Статус"], ...(output.excluded_suppliers || []).map(group => [group.status === "unknown" ? [...new Set(group.products.map(sourceSite))].join("; ") : sourceSite(group), group.supplier_id, group.shop_name, group.supplier_url, group.products.length, group.unique_offers, group.duplicate_cards, group.status === "unknown" ? "Поставщик неизвестен: неподходящие карточки" : "Только неподходящие карточки"] )]]);
+        summary.push(["Поставщиков только с неподходящими карточками", output.total_excluded_suppliers || 0], ["Неподходящих карточек без поставщика", output.excluded_unknown_cards || 0]);
+      }
     }
     const pictures = sheets.map(([, , photoColumn, products]) => photoColumn == null ? [] : products.flatMap((product, i) => {
       const item = media.get(product.image_url); return item ? [{ row: i + 1, media: item.id }] : [];
