@@ -11,7 +11,8 @@ async function createHarness(browser, t) {
   const timers = new Set();
   const tabs = new Map(); let nextTabId = 2, runtimeHandlers = [], createdHandlers = [], updatedHandlers = [], removedHandlers = [];
   const prepared = new WeakSet();
-  const popupErrors = [];
+  const popupErrors = [], notifications = [], activeNotifications = new Map(), badge = {}, activatedTabs = [];
+  let storageHandlers = [], notificationClicks = [], notificationButtons = [];
   function dispatch(message, sender) { return new Promise(resolve => { const result = runtimeHandlers[0]?.(message, sender, resolve); if (result !== true) resolve({ ok: true }); }); }
   t.after(async () => { for (const timer of timers) clearTimeout(timer); await context.close(); });
   const first = fs.readFileSync(path.join(__dirname, "../fixtures/results.html"), "utf8");
@@ -86,19 +87,19 @@ async function createHarness(browser, t) {
           changes[key] = { oldValue: structuredClone(data[key]), newValue: structuredClone(value) };
           data[key] = structuredClone(value);
         }
-        for (const observer of observers) observer(changes, "local");
+        for (const observer of [...observers, ...storageHandlers]) observer(changes, "local");
       },
       async remove(keys) {
         const changes = {};
         for (const key of typeof keys === "string" ? [keys] : keys) { if (data[key] !== undefined) changes[key] = { oldValue: structuredClone(data[key]) }; delete data[key]; }
-        for (const observer of observers) observer(changes, "local");
+        for (const observer of [...observers, ...storageHandlers]) observer(changes, "local");
       }
-    } },
+    }, get onChanged() { return event(storageHandlers); } },
     tabs: {
       async get(id) { const target = tabs.get(id); if (!target) throw new Error("Tab closed"); return { id, url: target.url(), status: "complete" }; },
       async query(options) { return options?.active ? [{ id: 1, url: page.url(), status: "complete" }] : [...tabs].map(([id, target]) => ({ id, url: target.url(), status: "complete" })); },
       async create({ url }) { if (url.startsWith(chrome.runtime.getURL(""))) { openedUi.push(url); return { id: nextTabId++, url, status: "complete" }; } const target = await context.newPage(); const id = nextTabId++; tabs.set(id, target); await preparePage(target); await target.goto(url); return { id, url, status: "complete" }; },
-      async update(id, options) { const target = tabs.get(id); if (options.url) await target.goto(options.url); if (options.active) await target.bringToFront(); return { id, url: target.url(), status: "complete" }; },
+      async update(id, options) { const target = tabs.get(id); if (options.url) await target.goto(options.url); if (options.active) { activatedTabs.push(id); await target.bringToFront(); } return { id, url: target.url(), status: "complete" }; },
       async sendMessage(id, message) {
         if (!await tabs.get(id).evaluate(() => Boolean(globalThis.__contentMessages))) await tabs.get(id).evaluate(() => {
           globalThis.__contentMessages = []; globalThis.chrome = { runtime: { onMessage: { addListener: listener => __contentMessages.push(listener) }, sendMessage: message => __backgroundFromContent(message) } };
@@ -119,12 +120,27 @@ async function createHarness(browser, t) {
       async clear(name) { return alarms.delete(name); },
       get onAlarm() { return event(alarmHandlers); }
     },
-    downloads: { async download(options) { downloads.push(options); return downloads.length; } }
+    downloads: { async download(options) { downloads.push(options); return downloads.length; } },
+    action: { async setBadgeText({ text }) { badge.text = text; }, async setBadgeBackgroundColor({ color }) { badge.color = color; }, async setTitle({ title }) { badge.title = title; } },
+    notifications: {
+      create(id, options, callback) {
+        notifications.push({ id, ...structuredClone(options) });
+        const finish = () => {
+          if (flags.notificationError) chrome.runtime.lastError = { message: flags.notificationError };
+          else activeNotifications.set(id, structuredClone(options));
+          callback(flags.notificationError ? undefined : id); delete chrome.runtime.lastError;
+        };
+        if (flags.notificationDelay) { const timer = setTimeout(() => { timers.delete(timer); finish(); }, flags.notificationDelay); timers.add(timer); } else finish();
+      },
+      clear(id, callback) { callback(activeNotifications.delete(id)); },
+      get onClicked() { return event(notificationClicks); }, get onButtonClicked() { return event(notificationButtons); }
+    }
   };
 
   function restart() {
     for (const timer of timers) clearTimeout(timer); timers.clear();
     runtimeHandlers = []; startupHandlers = []; alarmHandlers = []; createdHandlers = []; updatedHandlers = []; removedHandlers = [];
+    storageHandlers = []; notificationClicks = []; notificationButtons = [];
     sandbox = vm.createContext({
       chrome, URL, Date, crypto, console, TextEncoder, btoa,
       setTimeout(callback, delay) {
@@ -153,9 +169,11 @@ async function createHarness(browser, t) {
     throw new Error(`Background harness timed out: ${JSON.stringify(data.run)}`);
   }
   return {
-    context, page, command, waitFor, data, downloads, openedUi, observers, initialUrl, flags, tabs, detailHtml, granted,
+    context, page, command, waitFor, data, downloads, openedUi, observers, initialUrl, flags, tabs, detailHtml, granted, notifications, activeNotifications, badge, activatedTabs,
+    notificationClick: (id, button = false) => { for (const handler of button ? notificationButtons : notificationClicks) handler(id, 0); },
     idle: () => !vm.runInContext("processing || starting", sandbox),
     stage2Idle: () => !vm.runInContext("SupplierStage.busy()", sandbox),
+    attentionIdle: () => vm.runInContext("SupplierStage.syncAttention()", sandbox),
     alarm: name => { for (const handler of alarmHandlers) handler({ name }); },
     async closeTab(id) { await tabs.get(id).close(); tabs.delete(id); for (const handler of removedHandlers) await handler(id); },
     resume() { restart(); startupHandlers[0](); }

@@ -70,6 +70,8 @@
       ["source_page_url", "Страница выдачи"], ["task_ids", "ID заданий"], ["source_origin", "Адрес сайта-источника"],
       ["observation_id", "ID записи"], ["task_id", "ID задания"], ["page_index", "Страница задания"], ["card_index", "Позиция карточки"], ["capture_status", "Статус записи"]
     ];
+    const stage2 = output.report_type === "supplier_search";
+    if (stage2) columns.push(["stage2_offer_key", "Ключ уникальной карточки"], ["stage2_offer_occurrences", "Появлений карточки в выбранных заданиях"]);
     const value = (item, key) => key === "source_site" ? sourceSite(item) : key === "source_origin" ? sourceOrigin(item) : item[key];
     const tasks = output.tasks || [], thumbnails = options.thumbnails instanceof Map ? options.thumbnails : new Map();
     const photos = options.includeImages === true;
@@ -94,6 +96,12 @@
       ["Задания", [["ID задания", "Запрос / метка", "Сайт-источник", "Адрес выдачи", "Статус", "Начало (UTC)", "Обновлено (UTC)", "Завершено (UTC)", "Собрано страниц", "Лимит страниц", "Товаров в задании", "Этап / сообщение"], ...tasks.map(task => [task.id, task.query, sourceSite(task), task.source_url, task.status, task.started_at, task.updated_at, task.finished_at, task.completed_pages, task.max_pages, task.products.length, task.message])]],
       ["Товары заданий", [["ID задания", "Запрос задания", ...titles], ...taskProducts], photos ? 3 : null, tasks.flatMap(task => task.products)]
     ];
+    if (stage2) {
+      const suppliers = [...output.suppliers];
+      if (output.unresolved_products?.length) suppliers.push({ shop_name: "Поставщик неизвестен", status: "unknown", products: output.unresolved_products, unique_offers: output.unknown_unique_offers, duplicate_cards: output.unresolved_products.length - output.unknown_unique_offers });
+      sheets[1][1] = [["Сайт-источник", "ID поставщика", "Магазин", "Ссылка", "Всего карточек", "Уникальных карточек", "Повторных появлений", "Статус"], ...suppliers.map(group => [group.status === "unknown" ? [...new Set(group.products.map(sourceSite))].join("; ") : sourceSite(group), group.supplier_id, group.shop_name, group.supplier_url, group.products.length, group.unique_offers, group.duplicate_cards, group.status === "unknown" ? "Поставщик неизвестен" : "Определён"] )];
+      sheets.push(["Сводка этапа 2", [["Показатель", "Значение"], ["Состояние", output.status === "finished" ? "Итоговый результат" : "Предварительный результат"], ["Выбранных заданий", output.total_tasks], ["Поставщиков определено", output.total_suppliers], ["Всего карточек", output.total_cards], ["Уникальных карточек", output.unique_offers], ["Повторных появлений", output.duplicate_cards], ["Карточек без поставщика", output.unknown_cards], ["Уникальных карточек без поставщика", output.unknown_unique_offers], ["Запланировано проверок", output.card_checks.planned], ["Открыто карточек", output.card_checks.opened], ["Проверено карточек", output.card_checks.checked], ["Пропущено проверок", output.card_checks.skipped]]]);
+    }
     const pictures = sheets.map(([, , photoColumn, products]) => photoColumn == null ? [] : products.flatMap((product, i) => {
       const item = media.get(product.image_url); return item ? [{ row: i + 1, media: item.id }] : [];
     }));

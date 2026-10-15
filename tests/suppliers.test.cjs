@@ -98,10 +98,12 @@ for (const [source, url, store] of [
   seed(h, [task("a", [product(id, { source, product_url: url })])]);
   await prepare(h, ["a"]); await start(h); await h.waitFor(data => data.supplier_search?.status === "paused"); await h.waitFor(() => h.stage2Idle());
   assert.equal(h.data.supplier_search.pause_reason, "challenge"); assert.equal(h.data.supplier_search.cursor, 0);
+  await h.attentionIdle(); assert.equal(h.notifications.length, 1); assert.equal(h.badge.text, "!"); assert.match(h.notifications[0].title, /капча/);
   assert.equal(h.data.supplier_search.opened_keys.length, 1); assert.equal((await h.command("SUPPLIERS_START")).ok, false); assert.equal(navigations, 1);
   blocked = false; await h.tabs.get(h.data.supplier_search.tab_id).setContent('<h1>Cup</h1><a class="company-name" href="' + store + '">Cup Factory</a>');
   await start(h); const result = (await done(h)).result;
   assert.equal(result.suppliers[0].supplier_url, store); assert.equal(result.card_checks.opened, 1); assert.equal(result.card_checks.checked, 1); assert.equal(navigations, 1);
+  await h.attentionIdle(); assert.equal(h.badge.text, ""); assert.equal(h.activeNotifications.size, 0); assert.equal(h.notifications.length, 1);
 });
 
 test("skipping an in-flight detail discards its late result and never opens the next card", async t => {

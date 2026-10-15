@@ -25,7 +25,7 @@ function controls() {
   $("skip").disabled = acting || !job || job.status === "finished";
   $("show-tab").disabled = acting || job?.tab_id == null;
   $("save-interval").disabled = acting || !job || job.status === "finished";
-  for (const id of ["export-json", "export-xlsx", "export-csv"]) $(id).disabled = acting || !state.result;
+  for (const id of ["export-json", "export-xlsx", "export-csv", "result-export-xlsx"]) $(id).disabled = acting || !state.result;
   $("first-stage-note").hidden = !state.first_stage_running;
 }
 function renderTasks(force = false) {
@@ -89,11 +89,13 @@ function renderResult() {
     button.setAttribute("aria-expanded", String(open)); button.addEventListener("click", () => { if (expanded.has(supplier.key)) expanded.delete(supplier.key); else expanded.add(supplier.key); renderResult(); }); title.append(button);
     if (supplier.supplier_id) title.append(el("small", "ID: " + supplier.supplier_id, "supplier-id"));
     const store = el("td"); store.append(link(supplier.supplier_url, supplier.supplier_url ? "Открыть магазин ↗" : "—"));
-    row.append(title, el("td", site(supplier.source)), el("td", products.length), store, el("td", supplier.status === "unknown" ? "Поставщик неизвестен" : "По ID / ссылке магазина")); rows.push(row);
-    if (open) { const child = el("tr", null, "tree-row"), cell = el("td"); cell.colSpan = 5; cell.append(productTree(products, images)); child.append(cell); rows.push(child); }
+    row.append(title, el("td", site(supplier.source)), el("td", products.length), el("td", new Set(products.map(SupplierSearchCore.offerKey)).size), store, el("td", supplier.status === "unknown" ? "Поставщик неизвестен" : "По ID / ссылке магазина")); rows.push(row);
+    if (open) { const child = el("tr", null, "tree-row"), cell = el("td"); cell.colSpan = 6; cell.append(productTree(products, images)); child.append(cell); rows.push(child); }
   }
   $("suppliers").replaceChildren(...rows); $("empty").hidden = Boolean(rows.length);
   $("supplier-count").textContent = result?.total_suppliers || 0; $("card-count").textContent = result?.total_cards || 0; $("unknown-count").textContent = result?.unknown_cards || 0; $("task-count").textContent = result?.source_tasks.length || 0;
+  $("unique-count").textContent = result?.unique_offers || 0; $("repeat-count").textContent = result?.duplicate_cards || 0;
+  $("unique-note").textContent = `Уникальность определяется по площадке и ID предложения, при отсутствии ID — по ссылке; на обычных сайтах — по полной ссылке с вариантом товара. Без ID и ссылки строки считаются отдельными. Все появления сохраняются.${result ? ` Среди карточек без поставщика уникальных: ${result.unknown_unique_offers}.` : ""}`;
   $("result-state").textContent = !result ? "Результат ещё не подготовлен" : state.job.status === "finished" ? "Итоговый результат" : "Предварительный результат · уточнение ещё не завершено";
 }
 async function refresh() {
@@ -108,6 +110,10 @@ async function refresh() {
     renderTasks(changedJob); controls();
     $("badge").textContent = labels[job?.status] || "Задание не выбрано"; $("badge").dataset.state = job?.status || "";
     $("status").textContent = job?.message || "Выберите задания и обработайте сохранённые результаты.";
+    $("challenge-alert").hidden = !(job?.status === "paused" && job.pause_reason === "challenge");
+    $("notification-error").hidden = $("challenge-alert").hidden || !job?.attention_notification_error;
+    $("notification-error").textContent = job?.attention_notification_error ? "Системное уведомление недоступно. Состояние проверки показано здесь и в окне расширения." : "";
+    $("challenge-tab").disabled = acting || job?.tab_id == null;
     const current = job?.current_key && job.queue.find(entry => entry.key === job.current_key);
     $("current-card").hidden = !current || job.status === "finished";
     $("current-card").replaceChildren(...(current ? [document.createTextNode("Текущая карточка: "), link(current.product_url, current.title)] : []));
@@ -134,9 +140,10 @@ $("start").addEventListener("click", () => {
 $("pause").addEventListener("click", () => { void action(() => send("SUPPLIERS_PAUSE")); });
 $("skip").addEventListener("click", () => { void action(() => send("SUPPLIERS_SKIP")); });
 $("show-tab").addEventListener("click", () => { void action(() => send("SUPPLIERS_TAB")); });
+$("challenge-tab").addEventListener("click", () => { void action(() => send("SUPPLIERS_TAB")); });
 $("save-interval").addEventListener("click", () => { void action(async () => { await send("SUPPLIERS_INTERVAL", { interval_seconds: Number($("interval").value) }); intervalDirty = false; }); });
 for (const format of ["json", "csv"]) $("export-" + format).addEventListener("click", () => { void action(() => send("SUPPLIERS_EXPORT", { format })); });
-$("export-xlsx").addEventListener("click", () => { void action(() => send("OPEN_EXCEL", { stage: 2 })); });
+for (const id of ["export-xlsx", "result-export-xlsx"]) $(id).addEventListener("click", () => { void action(() => send("OPEN_EXCEL", { stage: 2 })); });
 $("filter").addEventListener("input", renderResult);
 $("expand-all").addEventListener("click", () => { for (const supplier of state?.result?.suppliers || []) expanded.add(supplier.key); renderResult(); });
 $("collapse-all").addEventListener("click", () => { expanded.clear(); renderResult(); });

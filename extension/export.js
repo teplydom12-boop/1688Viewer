@@ -16,6 +16,7 @@ async function initialize() {
     const permissions = await Promise.all(origins.map(async origin => await chrome.permissions.contains({ origins: [origin] }) ? null : origin));
     requiredOrigins = permissions.filter(Boolean);
     $("summary").textContent = `${snapshot.report_type === "supplier_search" ? "Этап 2, выбранные задания" : taskId ? "Выбранная проверка" : "Вся память"}: ${snapshot.total_products} карточек (с повторами) · ${snapshot.total_tasks} проверок · ${imageUrls.length} разных изображений. Снимок данных на ${new Date(snapshot.exported_at).toLocaleString("ru-RU")}.`;
+    if (snapshot.report_type === "supplier_search") $("summary").textContent += ` Уникальных карточек: ${snapshot.unique_offers}, повторных появлений: ${snapshot.duplicate_cards}. Лист «Поставщики» содержит магазины и счётчики, лист «Товары» — все их найденные карточки.`;
     $("download").disabled = false;
   } catch (cause) { error(cause.message); }
 }

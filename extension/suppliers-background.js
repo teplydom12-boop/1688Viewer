@@ -3,8 +3,50 @@
 const SupplierStage = (() => {
   const C = globalThis.SupplierSearchCore, key = "supplier_search", cacheKey = "supplier_search_cache", alarm = "supplier-search-progress";
   let working = false, preparing = false;
+  const attentionNotice = "supplier-search-attention";
+  let attentionSync = Promise.resolve(), attentionVisual = null;
   const busy = () => working || preparing;
   async function read() { return (await chrome.storage.local.get(key))[key] || null; }
+  const attentionToken = job => job?.status === "paused" && job.pause_reason === "challenge" ? job.attention_id || job.id + ":" + job.updated_at : null;
+  function notificationCall(method, ...args) {
+    return new Promise((resolve, reject) => {
+      try { chrome.notifications[method](...args, result => { const error = chrome.runtime.lastError; if (error) reject(new Error(error.message)); else resolve(result); }); }
+      catch (error) { reject(error); }
+    });
+  }
+  function syncAttention() {
+    // Serialize notification work and read the latest state, so an old pause
+    // cannot leave a stale badge/notification after Continue, Skip or Clear.
+    attentionSync = attentionSync.catch(() => {}).then(async () => {
+      const job = await read(), token = attentionToken(job), visual = Boolean(token);
+      if (attentionVisual !== visual) {
+        await Promise.allSettled([
+          chrome.action?.setBadgeText({ text: token ? "!" : "" }),
+          chrome.action?.setBadgeBackgroundColor({ color: "#bf3434" }),
+          chrome.action?.setTitle({ title: token ? "Этап 2 на паузе: пройдите капчу или вход" : "Supplier Viewer" })
+        ]);
+        if (!token && chrome.notifications?.clear) await notificationCall("clear", attentionNotice).catch(() => {});
+        attentionVisual = visual;
+      }
+      if (!token || job.attention_notified === token) return;
+      let failure = null;
+      try {
+        if (!chrome.notifications?.create) throw new Error("Системные уведомления недоступны. Откройте рабочую вкладку из расширения.");
+        await notificationCall("create", attentionNotice, { type: "basic", iconUrl: chrome.runtime.getURL("icons/128.png"),
+          title: "Этап 2: капча или вход — работа на паузе", message: "Откройте рабочую вкладку, пройдите проверку вручную и нажмите «Продолжить» на этапе 2.",
+          priority: 2, requireInteraction: true, buttons: [{ title: "Открыть рабочую вкладку" }] });
+      } catch (error) { failure = error.message; }
+      await withStateLock(async () => {
+        const latest = await read(); if (attentionToken(latest) !== token) return;
+        await chrome.storage.local.set({ [key]: { ...latest, attention_notified: token, attention_notification_error: failure } });
+      });
+    });
+    return attentionSync;
+  }
+  async function openAttention(id) {
+    if (id !== attentionNotice || !attentionToken(await read())) return;
+    try { await showTab(); } catch { await chrome.tabs.create({ url: chrome.runtime.getURL("suppliers.html") }); }
+  }
   async function running(id) { const job = await read(); return job?.id === id && job.status === "running" ? job : null; }
   function note(job, stage, message) { const at = new Date().toISOString(); return { ...job, stage, message, updated_at: at, log: [...job.log, { at, stage, message }].slice(-150) }; }
   async function change(id, fn, allowPaused = false) {
@@ -83,10 +125,10 @@ const SupplierStage = (() => {
   async function pause(reason = "manual", message = "Поиск поставщиков приостановлен. Можно продолжить с сохранённого места.") {
     const paused = await withStateLock(async () => {
       const job = await read(); if (job?.status !== "running") return null;
-      const next = { ...note(job, "paused", message), status: "paused", pause_reason: reason };
+      const next = { ...note(job, "paused", message), status: "paused", pause_reason: reason, ...(reason === "challenge" ? { attention_id: crypto.randomUUID(), attention_notification_error: null } : {}) };
       await chrome.storage.local.set({ [key]: next }); await chrome.alarms.clear(alarm); return next;
     });
-    await cancelContent(paused); return { paused: true };
+    await cancelContent(paused); await syncAttention(); return { paused: true };
   }
   async function skip() {
     const finished = await withStateLock(async () => {
@@ -193,11 +235,14 @@ const SupplierStage = (() => {
   }
   async function showTab() {
     const job = await read(); if (job?.tab_id == null) throw new Error("Рабочая вкладка ещё не открыта.");
-    await chrome.tabs.update(job.tab_id, { active: true }); return {};
+    const tab = await chrome.tabs.update(job.tab_id, { active: true });
+    if (tab.windowId != null && chrome.windows?.update) await chrome.windows.update(tab.windowId, { focused: true }); return {};
   }
   async function excelSnapshot() {
     const job = await read(); if (!job) throw new Error("Сначала подготовьте результат этапа 2.");
-    const result = C.report(job), convert = row => ({ ...row, shop_name: row.supplier_conflict || !C.identified(row.supplier) ? C.unknown : row.supplier.shop_name || (row.supplier.supplier_url ? new URL(row.supplier.supplier_url).hostname : "Поставщик " + row.supplier.supplier_id),
+    const result = C.report(job), occurrences = new Map();
+    for (const row of result.products) { const key = C.offerKey(row); occurrences.set(key, (occurrences.get(key) || 0) + 1); }
+    const convert = row => ({ ...row, stage2_offer_key: C.offerKey(row), stage2_offer_occurrences: occurrences.get(C.offerKey(row)), shop_name: row.supplier_conflict || !C.identified(row.supplier) ? C.unknown : row.supplier.shop_name || (row.supplier.supplier_url ? new URL(row.supplier.supplier_url).hostname : "Поставщик " + row.supplier.supplier_id),
       supplier_id: row.supplier_conflict ? null : row.supplier.supplier_id, supplier_url: row.supplier_conflict ? null : row.supplier.supplier_url });
     const products = result.products.map(convert);
     return { ...result, exported_at: new Date().toISOString(), total_products: products.length, total_tasks: result.source_tasks.length, products,
@@ -225,5 +270,9 @@ const SupplierStage = (() => {
     await change(job.id, current => ({ ...current, stage: "reading", message: S.text(detail.message)?.slice(0, 500) || current.message }));
   }
   async function closed(tabId) { const job = await read(); if (job?.tab_id === tabId && job.status === "running") await pause("tab-closed", "Рабочая вкладка закрыта. Нажмите «Продолжить», чтобы открыть её заново."); }
-  return { busy, isRunning, prepare, state, start, pause, skip, setInterval, process, showTab, exportResult, excelSnapshot, progress, closed, alarm, key, cacheKey };
+  return { busy, isRunning, prepare, state, start, pause, skip, setInterval, process, showTab, exportResult, excelSnapshot, progress, closed, syncAttention, openAttention, alarm, key, cacheKey };
 })();
+chrome.storage.onChanged?.addListener((changes, area) => { if (area === "local" && "supplier_search" in changes) void SupplierStage.syncAttention().catch(() => {}); });
+chrome.notifications?.onClicked?.addListener(id => { void SupplierStage.openAttention(id).catch(() => {}); });
+chrome.notifications?.onButtonClicked?.addListener(id => { void SupplierStage.openAttention(id).catch(() => {}); });
+void SupplierStage.syncAttention().catch(() => {});

@@ -185,6 +185,7 @@
       if (result.products.some(item => item.supplier_url && (options.supplier_only || item.shop_name))) break;
       await delay(500);
     } while (Date.now() < deadline);
+    check();
     for (const item of result.products) item.detail_checked_at = new Date().toISOString();
     return result;
   }

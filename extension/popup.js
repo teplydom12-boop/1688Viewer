@@ -42,6 +42,9 @@ async function refresh() {
   $("show-tab").hidden = !state.run || state.run.status !== "paused";
   $("clear").disabled = running || state.stage2_busy || !state.can_clear;
   $("stage2").textContent = state.supplier_stage ? "Этап 2, поиск поставщиков · " + ({ ready: "готово к проверке", running: "в работе", paused: "пауза", finished: "готово" }[state.supplier_stage.status] || "") + " ↗" : "Этап 2, поиск поставщиков ↗";
+  const attention = state.supplier_stage?.status === "paused" && state.supplier_stage.pause_reason === "challenge";
+  $("stage2-attention").hidden = !attention;
+  $("stage2-challenge").disabled = state.supplier_stage?.tab_id == null;
   $("export").disabled = !state.count && !state.task_count;
   $("export-xlsx").disabled = !state.count && !state.task_count;
   $("task-count").textContent = `Заданий в памяти: ${state.task_count} · Всего карточек в памяти: ${state.count}`;
@@ -93,6 +96,7 @@ $("resume").addEventListener("click", () => { void action(() => send("RESUME", {
 $("dashboard").addEventListener("click", () => { void action(() => send("OPEN_DASHBOARD")); });
 $("history").addEventListener("click", () => { void action(() => send("OPEN_HISTORY")); });
 $("stage2").addEventListener("click", () => { void action(() => send("OPEN_SUPPLIERS")); });
+$("stage2-challenge").addEventListener("click", () => { void action(() => send("SUPPLIERS_TAB")); });
 $("export").addEventListener("click", () => { void action(() => send("EXPORT")); });
 $("export-xlsx").addEventListener("click", () => { void action(() => send("OPEN_EXCEL")); });
 $("clear").addEventListener("click", () => {

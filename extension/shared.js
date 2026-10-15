@@ -88,7 +88,7 @@
       if (!["http:", "https:"].includes(url.protocol)) return null;
       if (productUrl(url.href)) return null;
       const source = marketplace(`https://${url.hostname}/`);
-      if (source === "alibaba" && /^[a-z0-9-]+\.en\.alibaba\.com$/.test(url.hostname)) return `https://${url.hostname}/`;
+      if (source === "alibaba" && /^[a-z0-9-]+\.(?:en|trustpass)\.alibaba\.com$/.test(url.hostname)) return `https://${url.hostname}/`;
       if (source === "made-in-china" && /^[a-z0-9-]+\.en\.made-in-china\.com$/.test(url.hostname)) return `https://${url.hostname}/`;
       if (source !== "1688" || !url.hostname.endsWith(".1688.com")) return generic && !dangerousUrl(url.href) ? canonicalUrl(url.href) : null;
       const subdomain = url.hostname.slice(0, -9);

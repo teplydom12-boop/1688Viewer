@@ -10,7 +10,7 @@
   <header>
     <span class="brand-mark" aria-hidden="true">SV</span>
     <div><h1>Сбор поставщиков</h1><p>Сайты с карточками товаров</p></div>
-    <span class="version">0.12</span>
+    <span class="version">0.13</span>
   </header>
 
   <main>
@@ -33,6 +33,7 @@
     </form>
 
     <section class="collection" aria-label="Сохранённые данные">
+      <div id="stage2-attention" class="stage2-attention" role="alert" hidden><strong>Этап 2 на паузе: капча или вход</strong><p>Пройдите проверку в рабочей вкладке, затем нажмите «Продолжить» на этапе 2.</p><button id="stage2-challenge" type="button">Открыть проверку безопасности ↗</button></div>
       <button id="show-tab" type="button" hidden>Открыть рабочую вкладку / капчу</button>
       <div class="stats"><div><strong id="count">0</strong><span id="count-label">товаров в памяти</span></div><div><strong id="supplier-count">0</strong><span>поставщиков</span></div><div><strong id="page-count">0</strong><span>страниц</span></div><span id="badge">Готов к сбору</span></div>
       <p id="status" role="status" aria-live="polite">Результаты сохраняются между запусками.</p>

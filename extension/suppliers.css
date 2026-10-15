@@ -1,4 +1,5 @@
 .stage-workspace { display: block; max-width: 1550px; margin: auto; padding: 30px; min-height: calc(100vh - 78px); }
+.stage-workspace .stats { grid-template-columns: repeat(6, minmax(0, 1fr)); }.challenge-alert { padding: 16px; margin: 14px 0; border: 2px solid #bf3434; border-radius: 10px; color: #842020; background: #fff0ee; }.challenge-alert p { margin: 8px 0 12px; }#result-export-xlsx { margin-left: auto; }
 header nav { display: flex; margin-left: auto; gap: 20px; font-size: 12px; }header nav [aria-current] { color: #4a443c; font-weight: 650; }
 .task-selection { border: 1px solid #e7e1d8; border-radius: 12px; padding: 20px; background: #fff; margin: 20px 0; }
 .selection-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 16px 0; }.selection-tools input { max-width: 360px; }.selection-tools .muted { margin: 0 0 0 auto; }
@@ -9,4 +10,5 @@ header nav { display: flex; margin-left: auto; gap: 20px; font-size: 12px; }head
 .image-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0; }.image-controls label { margin: 0; font-weight: 400; }.image-controls input { width: 180px; padding: 0; accent-color: #eb5e21; }.image-controls output { min-width: 48px; font-size: 12px; }
 .stage-thumbnail { display: block; object-fit: contain; background: #fff; border-radius: 4px; max-width: none; }.product-tree td { vertical-align: middle; }.product-tree .title-cell { min-width: 220px; overflow-wrap: anywhere; }
 #suppliers > tr > td { overflow-wrap: anywhere; }.supplier-name { max-width: 550px; }.supplier-name:hover { color: #b84c1d; }.stage-workspace .supplier-id { margin-left: 0; }
+@media (max-width:850px) { .stage-workspace .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width:850px) { header { height: auto; min-height: 78px; flex-wrap: wrap; padding: 14px 18px; gap: 12px; }header nav { order: 3; width: 100%; gap: 16px; flex-wrap: wrap; }.stage-workspace { padding: 18px; }.queue-stats { grid-template-columns: repeat(2, 1fr); }.selection-tools .muted { margin-left: 0; }.prepare-actions { align-items: flex-start; flex-direction: column; }.stage-actions #skip { margin-left: 0; }.task-selection { padding: 14px; } }

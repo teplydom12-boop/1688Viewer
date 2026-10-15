@@ -123,9 +123,12 @@
     }
     const suppliers = [...groups.values()];
     if (unresolved.length) suppliers.push({ key: "unknown", source: null, supplier_id: null, shop_name: unknown, supplier_url: null, status: "unknown", products: unresolved });
+    const unique = products => new Set(products.map(offerKey)).size;
+    for (const supplier of suppliers) { supplier.unique_offers = unique(supplier.products); supplier.duplicate_cards = supplier.products.length - supplier.unique_offers; }
+    const uniqueOffers = unique(rows);
     return { schema_version: 1, report_type: "supplier_search", job_id: job.id, status: job.status, started_at: job.started_at, finished_at: job.finished_at || null,
-      source_tasks: job.source_tasks, sources: [...new Set(rows.map(source))], total_cards: rows.length, unique_offers: new Set(rows.map(offerKey)).size,
-      total_suppliers: groups.size, unknown_cards: unresolved.length, card_checks: { planned: job.queue.length, opened: job.opened_keys.length, checked: job.checked_count, processed: job.cursor, skipped: job.skipped_count || 0 },
+      source_tasks: job.source_tasks, sources: [...new Set(rows.map(source))], total_cards: rows.length, unique_offers: uniqueOffers, duplicate_cards: rows.length - uniqueOffers,
+      total_suppliers: groups.size, unknown_cards: unresolved.length, unknown_unique_offers: unique(unresolved), card_checks: { planned: job.queue.length, opened: job.opened_keys.length, checked: job.checked_count, processed: job.cursor, skipped: job.skipped_count || 0 },
       suppliers, products: rows, scope: "only_cards_from_selected_tasks" };
   }
   const api = { unknown, offerKey, evidence, identified, complete, rowsFromTasks, queue, reuse, needsCheck, matchDetail, applyDetail, report };
