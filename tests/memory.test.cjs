@@ -151,6 +151,7 @@ test("dashboard shows task history, historical results, Excel export and clears 
   await dashboard.waitForFunction(() => document.querySelectorAll("#tasks tr").length === 2);
   assert.match(await dashboard.locator("#tasks").textContent(), /Термосы/);
   assert.equal(await dashboard.locator("#progress").evaluate(node => node.value), 100);
+  await dashboard.locator("#extra-views > summary").click();
   await dashboard.locator("#task-filter").selectOption(first);
   await dashboard.waitForFunction(() => document.getElementById("task-view-note").textContent.includes("Снимок"));
   assert.match(await dashboard.locator(".product-tree").textContent(), /12.50/);

@@ -45,6 +45,7 @@ async function refresh() {
   $("export").disabled = !state.count && !state.task_count;
   $("export-xlsx").disabled = !state.count && !state.task_count;
   $("task-count").textContent = `Заданий в памяти: ${state.task_count} · Всего карточек в памяти: ${state.count}`;
+  $("history").textContent = `История проверок · ${state.task_count} заданий ↗`;
   const run = state.run;
   $("progress").value = !run ? 0 : run.status === "finished" ? 100 : run.phase === "details" ? 100 * run.detail_index / Math.max(1, run.detail_total) : 100 * run.completed_pages / Math.max(1, run.max_pages);
   $("progress-label").textContent = run ? `${run.query || "Текущее задание"} · Страницы: ${run.completed_pages}/${run.max_pages}${run.phase === "details" ? ` · Карточки: ${run.detail_index}/${run.detail_total}` : ""} · Товаров сохранено: ${state.tasks.find(task => task.id === run.id)?.product_count || 0}` : "";

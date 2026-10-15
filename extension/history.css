@@ -19,4 +19,7 @@
 .memory-products td { vertical-align: middle; padding-top: 10px; padding-bottom: 10px; }
 .image-unavailable { font-size: 11px; color: #82796d; }
 #toggle-images[aria-pressed="true"] { border-color: #eb5e21; color: #b44516; background: #fff4eb; }
+.memory-controls { display: flex; gap: 16px; flex-wrap: wrap; margin: 18px 0 10px; }.memory-controls > div { min-width: 180px; }.memory-controls label { margin-top: 0; }.memory-controls select { width: auto; min-width: 180px; }
+.history-workspace > .page-heading { border-left: 5px solid #eb5e21; padding: 18px 20px; border-radius: 10px; background: #fff3e9; }.history-workspace > .page-heading h1 { font-size: 32px; }.history-workspace > .table-wrap { box-shadow: 0 3px 16px #6b4c2110; }
+#history-tasks [data-action="open"] { color: #a63d12; border-color: #e6ae90; background: #fff4eb; }#history-tasks tr[data-selected="true"] { box-shadow: inset 4px 0 #eb5e21; }
 @media (max-width: 850px) { .history-workspace { padding: 18px; }.history-workspace .page-heading { display: block; }.history-workspace .exports { justify-content: flex-start; margin-top: 12px; } }

@@ -651,7 +651,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         if (!["standard", "high", "maximum"].includes(options.excel_image_quality)) throw new Error("Неизвестное качество изображений.");
         updates.excel_image_quality = options.excel_image_quality;
       }
-      if (!Object.keys(updates).length || Object.keys(options).some(key => !(key in updates))) throw new Error("Некорректная настройка отображения.");
+      if ("history_view" in options) { if (!["cards", "suppliers"].includes(options.history_view)) throw new Error("Неизвестный вид истории."); updates.history_view = options.history_view; }
+      if ("history_price_order" in options) { if (!["original", "price-asc", "price-desc"].includes(options.history_price_order)) throw new Error("Неизвестный порядок цен."); updates.history_price_order = options.history_price_order; }
+      if (!Object.keys(updates).length || Object.keys(options).some(key => !Object.hasOwn(updates, key))) throw new Error("Некорректная настройка отображения.");
       const { view_preferences = {} } = await chrome.storage.local.get("view_preferences");
       await chrome.storage.local.set({ view_preferences: { ...view_preferences, ...updates } }); return {};
     }),

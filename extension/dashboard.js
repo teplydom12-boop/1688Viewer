@@ -56,6 +56,7 @@ async function renderTasks() {
   const tasks = state.tasks || [], selected = $("task-filter").value;
   const labels = { running: "В работе", paused: "Пауза", stopped: "Остановлено", finished: "Завершено" };
   $("task-count").textContent = `Заданий в памяти: ${tasks.length}`;
+  $("history-entry-count").textContent = `${tasks.length} заданий`;
   $("tasks-empty").hidden = Boolean(tasks.length);
   $("tasks").replaceChildren(...tasks.map(task => {
     const row = element("tr"), name = element("td", task.query || (task.kind === "details" ? "Проверка карточек" : "Поиск без метки"));
@@ -66,7 +67,8 @@ async function renderTasks() {
     progress.value = task.status === "finished" ? 100 : task.phase === "details" ? 100 * task.detail_index / Math.max(1, task.detail_total) : 100 * task.completed_pages / Math.max(1, task.max_pages);
     progress.setAttribute("aria-label", `Прогресс задания ${task.query || task.id}`);
     progressCell.append(progress, element("small", `${task.completed_pages}/${task.max_pages} стр.${task.partial_page_count ? " · есть сохранённая часть страницы" : ""}${task.phase === "details" ? ` · ${task.detail_index}/${task.detail_total} карточек` : ""}`, "confidence"));
-    row.append(name, element("td", task.source || "—"), status, progressCell, element("td", task.product_count)); return row;
+    const memory = element("td"), open = element("a", "Открыть проверку →"); open.href = "history.html#" + encodeURIComponent(task.id); memory.append(open);
+    row.append(name, element("td", task.source || "—"), status, progressCell, element("td", task.product_count), memory); return row;
   }));
   const all = element("option", "Вся память — карточки с повторами"); all.value = "";
   $("task-filter").replaceChildren(all, ...tasks.map(task => { const option = element("option", `${task.query || "Без метки"} · ${task.source || "Проверка"} · ${new Date(task.started_at).toLocaleString("ru-RU")}`); option.value = task.id; return option; }));

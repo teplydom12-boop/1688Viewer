@@ -19,10 +19,10 @@
       const index = products.findIndex(item => (item.url || item.productId) === (product.url || product.productId));
       if (index < 0) products.push(product); else products[index] = product;
     }
-    state.products = products.slice(-600);
+    state.products = products.slice(-2000);
     // Latest response's pagination replaces older search checkpoints.
     if (result.pagination.length) state.pagination = result.pagination;
-    state.truncated ||= result.diagnostics.truncated || products.length > 600;
+    state.truncated ||= result.diagnostics.truncated || products.length > 2000;
     state.responses++;
   }
   async function observe(response) {

@@ -2,7 +2,7 @@
 <html lang="ru">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Этап 2, поиск поставщиков — Supplier Viewer</title><link rel="stylesheet" href="dashboard.css"><link rel="stylesheet" href="suppliers.css"></head>
 <body>
-  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>Этап 2, поиск поставщиков</small></div></div><nav aria-label="Разделы"><a href="dashboard.html">Этап 1, сбор выдачи</a><a href="history.html">История проверок</a><a href="suppliers.html" aria-current="page">Этап 2, поиск поставщиков</a></nav><span class="version">0.11</span></header>
+  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>Этап 2, поиск поставщиков</small></div></div><nav class="app-nav" aria-label="Разделы"><a href="dashboard.html">Этап 1, сбор выдачи</a><a href="history.html" id="history-link" class="history-nav">История проверок</a><a href="suppliers.html" aria-current="page">Этап 2, поиск поставщиков</a></nav><span class="version">0.12</span></header>
   <main class="stage-workspace">
     <div class="page-heading"><div><h1>Этап 2, поиск поставщиков</h1><p class="muted">Выберите задания с любых площадок. В результат попадут только уже найденные карточки. Цена и минимальный заказ не влияют на отбор.</p></div><div class="exports"><button id="export-json" class="primary" disabled>Скачать JSON</button><button id="export-xlsx" disabled>Excel (.xlsx)</button><button id="export-csv" disabled>CSV</button></div></div>
     <p id="error" class="error" role="alert" hidden></p>

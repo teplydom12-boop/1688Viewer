@@ -3,9 +3,13 @@
   const S = root.SupplierCollector;
   const ANCHORS = 'a[href], [data-snapshot-anchor][href]';
   const normalizedClass = node => String(node.className || "").toLowerCase().replace(/[-_]/g, "");
-  const classNodes = (node, patterns) => [...node.querySelectorAll("[class]")].filter(item => patterns.some(pattern => normalizedClass(item).includes(pattern)));
+  const memo = (node, key, read) => root.SupplierNavigator?.memo ? root.SupplierNavigator.memo(node, key, read) : read();
+  const classNodes = (node, patterns) => memo(node, "class-nodes", () => [...node.querySelectorAll("[class]")]).filter(item => patterns.some(pattern => normalizedClass(item).includes(pattern)));
   function businessText(node) {
     if (!node) return null;
+    return memo(node, "business-text", () => readBusinessText(node));
+  }
+  function readBusinessText(node) {
     const parts = [], walker = node.ownerDocument.createTreeWalker(node, 4, { acceptNode: child => child.parentElement?.closest("script,style,template,noscript") ? 2 : 1 });
     while (walker.nextNode()) parts.push(walker.currentNode.nodeValue);
     return S.text(parts.join(""));
@@ -34,7 +38,7 @@
   }
 
   function idsIn(node, url) {
-    return new Set([...node.querySelectorAll(ANCHORS)].map(anchor => linkOffer(anchor, url)?.id).filter(Boolean));
+    return memo(node, "offer-ids:" + url, () => new Set([...node.querySelectorAll(ANCHORS)].map(anchor => linkOffer(anchor, url)?.id).filter(Boolean)));
   }
 
   function linkOffer(anchor, base) {
@@ -50,6 +54,8 @@
   }
 
   function cardFor(node, offer, url) {
+    const declared = node.closest('article,[data-offer-id],[data-offerid],[data-renderkey],[class*="product-card" i],[class*="productCard"],[class*="offer-card" i],[class*="offerCard"]');
+    if (declared) { const ids = idsIn(declared, url); if (ids.size === 1 && ids.has(offer.id)) return declared; }
     let selected = node;
     for (let depth = 0, current = node; current && depth < 14; depth++, current = current.parentElement) {
       if (["BODY", "HTML", "MAIN"].includes(current.tagName)) break;
@@ -102,8 +108,8 @@
       .map(node => ({ node, url: S.supplierUrl(node.getAttribute("href"), url) })).filter(item => item.url);
     const ambiguous = detail && new Set(supplierLinks.map(item => item.url)).size > 1;
     const supplierLink = ambiguous ? null : supplierLinks[0];
-    const shopName = !ambiguous && firstText(classNodes(card, ["companyname", "shopname", "suppliername", "sellername"]).filter(belongs), snapshot) ||
-      usefulName(supplierLink?.node.getAttribute("title")) || usefulName(text(supplierLink?.node));
+    const shopName = usefulName(supplierLink?.node.getAttribute("title")) || usefulName(text(supplierLink?.node)) ||
+      !ambiguous && firstText(classNodes(card, ["companyname", "shopname", "suppliername", "sellername"]).filter(belongs), snapshot);
     const imageUrl = root.SupplierGeneric.image(card, url);
     return { title, price, minimum_order: minimumOrder, shop_name: shopName, supplier_url: supplierLink?.url || null, image_url: imageUrl };
   }
@@ -187,6 +193,9 @@
   }
 
   function extract(doc, options) {
+    return root.SupplierNavigator?.withSample ? root.SupplierNavigator.withSample(() => extractSample(doc, options)) : extractSample(doc, options);
+  }
+  function extractSample(doc, options) {
     const { url, label, mode = "search", snapshot = false, raw = true, profile = {} } = options;
     const source = S.site(url);
     const generic = !S.marketplace(url);
@@ -221,7 +230,10 @@
         const offer = linkOffer(anchor, url);
         if (offer && shown(anchor, snapshot)) candidates.push({ anchor, offer, method: "dom-link" });
       }
-      if (root.SupplierGeneric) candidates.push(...root.SupplierGeneric.infer(doc, { url, snapshot, profile }).candidates);
+      if (root.SupplierGeneric) {
+        const nativeCards = [...new Set(candidates.filter(candidate => candidate.anchor && ["dom-link", "dom-id", "1688:renderkey"].includes(candidate.method)).map(candidate => cardFor(candidate.anchor, candidate.offer, url)).filter(node => node && (CARD_PATTERN.test(normalizedClass(node)) || node.matches("article,li,[data-offer-id],[data-renderkey]"))))];
+        candidates.push(...root.SupplierGeneric.infer(doc, { url, snapshot, profile, nativeCards }).candidates);
+      }
     }
     const records = [], entries = [];
     const currentOffer = S.productUrl(url, url, generic);
@@ -320,8 +332,8 @@
       if (raw) occurrenceRaw.push({ product_id: item.product_id, source: item.source, page_card_key: pageCardKey, source_page_url: url, collected_at: timestamp, html: node ? sanitizedCard(node, url) || "" : "", record: item });
     }
     return { products, cards, raw_cards: occurrenceRaw, diagnostics: {
-      engine_version: "0.11.0", source, methods: [...new Set(candidates.map(item => item.method))], expected_page_size: expectedPageSize(doc, url), page_context: mode === "search" ? pageContext(doc, url) : null,
-      data_truncated: Boolean(additions.truncated), pagination: additions.pagination,
+      engine_version: "0.12.0", source, methods: [...new Set(candidates.map(item => item.method))], expected_page_size: expectedPageSize(doc, url), page_context: mode === "search" ? pageContext(doc, url) : null,
+      data_truncated: Boolean(additions.truncated), data_truncation_reasons: additions.truncation_reasons || [], component_discovery_limited: additions.component_discovery_limited || false, pagination: additions.pagination,
       price_conflicts: conflicting.length,
       inferred_cards: products.filter(item => item.extraction_confidence < 90).length, no_detail_links: products.filter(item => !item.product_url).length,
       missing_supplier_names: products.filter(item => !item.shop_name).length,

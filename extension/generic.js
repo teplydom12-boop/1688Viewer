@@ -10,19 +10,24 @@
   const value = node => S.text(node?.getAttribute("content") || node?.getAttribute("data-price") || node?.textContent || (node && root.SupplierNavigator.accessibleName(node)));
   function nodes(node, selector) { return [...new Set([...(node.matches?.(selector) ? [node] : []), ...root.SupplierNavigator.scopes(node).flatMap(scope => [...scope.querySelectorAll(selector)])])]; }
   function image(card, url, profile = {}) {
+    const read = () => readImage(card, url, profile);
+    return root.SupplierNavigator.memo ? root.SupplierNavigator.memo(card, "product-image:" + url + ":" + (profile.image || ""), read) : read();
+  }
+  function readImage(card, url, profile = {}) {
     const remembered = S.httpUrl(card.getAttribute("data-image-url"), url); if (remembered) return remembered;
     const selected = query(card, profile.image);
     const score = node => {
       const width = parseFloat(node.getAttribute("width") || node.style?.width || "0"), height = parseFloat(node.getAttribute("height") || node.style?.height || "0");
       if (width > 0 && height > 0 && width <= 40 && height <= 40) return -100;
-      if (node.closest('[class*="icon"],[class*="badge"],[class*="logo"],[class*="rating"],[class*="star"]')) return -100;
+      if (node.closest('[class*="icon"],[class*="badge"],[class*="logo"],[class*="rating"],[class*="star"],[class*="certification" i],[class*="certificate" i],[class*="verified" i],[class*="flag" i],[class*="arrow" i]')) return -100;
+      if (/^(?:CE|RoHS|ISO\s*\d+|verified supplier|audited supplier|diamond member)$/i.test(node.getAttribute("alt") || "")) return -100;
       const anchor = node.closest('a[href],[data-snapshot-anchor][href]');
       return (width >= 100 || height >= 100 ? 30 : 0) + (anchor && S.productUrl(anchor.getAttribute("href"), url) ? 40 : 0) + (/product|main.*img|photo|picture/i.test(node.className || "") ? 20 : 0);
     };
     const images = selected ? [selected] : nodes(card, 'img, [itemprop="image"], [property$=":image"], [role="img"]').sort((a, b) => score(b) - score(a));
     for (const node of images) {
       if (!selected && score(node) < 0) continue;
-      if (/icon|logo|star|badge/i.test(node.getAttribute("class") || "")) continue;
+      if (/icon|logo|star|badge|certification|certificate|verified|(?:^|[-_])flag|arrow/i.test(node.getAttribute("class") || "")) continue;
       const responsive = (node.getAttribute("srcset") || node.getAttribute("data-srcset") || "").split(",").map(item => item.trim().split(/\s+/)).sort((a, b) => parseFloat(b[1] || "0") - parseFloat(a[1] || "0"))[0]?.[0];
       for (const raw of [node.getAttribute("data-original"), responsive, node.getAttribute("data-src"), node.getAttribute("data-lazy-src"), node.currentSrc, node.getAttribute("src"), node.getAttribute("content")]) {
         if (!raw || /placeholder|transparent|spacer|loading\.gif/i.test(raw)) continue;
@@ -126,9 +131,12 @@
   function infer(doc, options = {}) {
     const { url, snapshot = false, profile = {} } = options;
     const candidates = [], seen = new Set();
+    const nativeCards = options.nativeCards || [];
+    const insideNative = node => nativeCards.some(card => card === node || card.contains(node));
+    const covered = node => insideNative(node) || nativeCards.some(card => node.contains(card));
     const roots = root.SupplierNavigator.scopes(doc);
     const add = (card, method, confidence) => {
-      if (seen.has(card) || !root.SupplierNavigator.visible(card, snapshot) || (card.textContent || "").length > 6500 || card.closest("header,footer,form")) return;
+      if (seen.has(card) || covered(card) || !root.SupplierNavigator.visible(card, snapshot) || (card.textContent || "").length > 6500 || card.closest("header,footer,form")) return;
       seen.add(card);
       const base = S.webUrl(card.ownerDocument.URL) ? card.ownerDocument.URL : url;
       const data = fields(card, base, profile.fields);
@@ -144,7 +152,7 @@
       for (const node of scope.querySelectorAll('[itemtype*="Product"], [data-product-id], [data-sku]')) add(node, "semantic-card", 95);
       for (const parent of [scope, ...scope.querySelectorAll("*")]) {
         if (candidates.length >= 600) break;
-        if (parent.closest?.("header,footer,form,nav") || parent.children.length < 2 || parent.children.length > 250) continue;
+        if (insideNative(parent) || parent.closest?.("header,footer,form,nav") || parent.children.length < 2 || parent.children.length > 250) continue;
         const groups = new Map();
         for (const node of parent.children) {
           const signature = `${node.localName}:${[...node.children].slice(0, 4).map(child => child.localName).join(",")}`;
@@ -152,6 +160,7 @@
         }
         for (const group of groups.values()) {
           if (group.length < 2) continue;
+          if (group.every(covered)) continue;
           const priced = group.filter(node => price(node)).length;
           if (priced < 2 || priced < group.length / 2) continue;
           for (const card of group) {
@@ -165,6 +174,7 @@
     const linked = [];
     const productPath = href => /\/(?:products?|items?|p|dp|goods|sku)(?:\/|[-_])/i.test(new URL(href).pathname);
     for (const scope of roots) for (const seed of [...scope.querySelectorAll('a[href], [data-snapshot-anchor][href]')].slice(0, 1000)) {
+      if (insideNative(seed)) continue;
       const base = S.webUrl(seed.ownerDocument.URL) ? seed.ownerDocument.URL : url;
       const href = S.httpUrl(seed.getAttribute("href"), base);
       if (!href || S.dangerousUrl(href) || S.canonicalUrl(href) === S.canonicalUrl(base) || seed.closest("header,footer,form,nav")) continue;

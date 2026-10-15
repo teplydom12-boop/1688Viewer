@@ -2,7 +2,7 @@
 <html lang="ru">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Supplier Viewer — история проверок</title><link rel="stylesheet" href="dashboard.css"><link rel="stylesheet" href="history.css"></head>
 <body>
-  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>История проверок</small></div></div><a class="local" href="suppliers.html">Этап 2, поиск поставщиков ↗</a><a href="dashboard.html" class="local">Сбор и общая память</a><span class="version">0.11</span></header>
+  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>Все проверки и сохранённая память</small></div></div><nav class="app-nav" aria-label="Разделы"><a href="dashboard.html">Этап 1, сбор выдачи</a><a href="history.html" id="history-link" class="history-nav" aria-current="page">История проверок</a><a href="suppliers.html">Этап 2, поиск поставщиков</a></nav><span class="version">0.12</span></header>
   <main class="history-workspace">
     <div class="page-heading"><div><h1>История проверок</h1><p class="muted">Откройте сохранённую память любого задания. Результаты остаются здесь после закрытия браузера.</p></div><div class="exports"><button id="refresh">Обновить</button><button id="export-all-json">Вся память: JSON</button><button id="export-all-xlsx">Вся память: Excel</button><button id="clear-all" class="danger">Удалить всю память</button></div></div>
     <p id="error" class="error" role="alert" hidden></p><p id="notice" role="status" aria-live="polite"></p>
@@ -12,12 +12,15 @@
     <section id="task-memory" hidden aria-labelledby="memory-title">
       <div class="page-heading"><div><h2 id="memory-title"></h2><p id="memory-meta" class="muted"></p></div><div class="exports"><button id="export-task-json">JSON этой проверки</button><button id="export-task-xlsx">Excel этой проверки</button><button id="export-task-raw">Исходники этой проверки</button><button id="delete-task" class="danger">Удалить память этой проверки</button></div></div>
       <p id="memory-status"></p><progress id="memory-progress" max="100" value="0" aria-label="Прогресс выбранной проверки"></progress><p id="memory-counts" class="muted"></p>
+      <div class="memory-controls"><div><label for="memory-view">Показать</label><select id="memory-view"><option value="cards">Карточки</option><option value="suppliers">Поставщики и дерево карточек</option></select></div><div><label for="price-order">Порядок по цене</label><select id="price-order"><option value="original">Как сохранено</option><option value="price-asc">По возрастанию</option><option value="price-desc">По убыванию</option></select></div><div><label for="price-currency">Валюта</label><select id="price-currency"><option value="">Все валюты</option></select></div></div>
+      <p id="price-note" class="muted">Сортировка служит для просмотра. Для поставщика используется минимальная цена найденных карточек; диапазон — по нижней границе. Валюты сравниваются отдельно, без пересчёта. Нечитаемые цены идут в конец.</p>
       <div class="image-controls"><button id="toggle-images" aria-pressed="false" aria-controls="memory-products">Показать картинки</button><label for="image-size">Размер картинок</label><input id="image-size" type="range" min="32" max="192" step="16" value="48" aria-controls="memory-products"><output id="image-size-value" for="image-size">48 px</output></div>
-      <div class="table-wrap"><table class="supplier-table memory-products"><thead><tr><th>Товар / ID</th><th>Цена</th><th>Минимальный заказ</th><th>Магазин / поставщик</th><th>Изображение</th><th>Дата сбора</th></tr></thead><tbody id="memory-products"></tbody></table><p id="memory-empty" class="empty" hidden>В этой проверке пока нет сохранённых товаров.</p></div>
+      <div id="memory-cards-wrap" class="table-wrap"><table class="supplier-table memory-products"><thead><tr><th>Товар / ID</th><th>Цена</th><th>Минимальный заказ</th><th>Магазин / поставщик</th><th>Изображение</th><th>Дата сбора</th></tr></thead><tbody id="memory-products"></tbody></table><p id="memory-empty" class="empty" hidden>В этой проверке пока нет сохранённых товаров.</p></div>
+      <div id="memory-suppliers-wrap" class="table-wrap" hidden><table class="supplier-table"><thead><tr><th>Поставщик</th><th>Магазин</th><th>Карточек</th><th>Минимальная цена</th></tr></thead><tbody id="memory-suppliers"></tbody></table></div><p id="memory-visible" class="muted"></p>
       <details class="activity"><summary>Сохранённые страницы</summary><ul id="memory-pages"></ul></details>
       <details class="activity" open><summary>Журнал этой проверки</summary><ol id="memory-log"></ol></details>
     </section>
   </main>
-  <script src="shared.js"></script><script src="images.js"></script><script src="history.js"></script>
+  <script src="shared.js"></script><script src="images.js"></script><script src="prices.js"></script><script src="history.js"></script>
 </body>
 </html>

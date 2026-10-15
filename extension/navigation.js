@@ -8,7 +8,21 @@
   const PREVIOUS = /(?:previous|prev\b|上一[页頁]|предыдущ|назад|first\s*page|last\s*page)/iu;
   const pagingClass = /pagin|paging|pager|pages?nav/i;
   const pageKeys = /^(?:page|p|pageNo|pageIndex|pageNum|page_number|currentPage|current|start|offset)$/i;
+  let sampleCache = null;
+  function memo(node, key, read) {
+    if (!sampleCache || !node) return read();
+    let values = sampleCache.get(node); if (!values) { values = new Map(); sampleCache.set(node, values); }
+    if (!values.has(key)) values.set(key, read());
+    return values.get(key);
+  }
+  function withSample(read) {
+    if (sampleCache) return read();
+    sampleCache = new WeakMap(); try { return read(); } finally { sampleCache = null; }
+  }
   function scopes(doc) {
+    return memo(doc, "scopes", () => discoverScopes(doc));
+  }
+  function discoverScopes(doc) {
     const roots = [doc];
     if (doc.shadowRoot) roots.push(doc.shadowRoot);
     for (let index = 0; index < roots.length && index < 50; index++) for (const node of roots[index].querySelectorAll("*")) {
@@ -219,5 +233,5 @@
     return { decision: automatic ? "automatic" : unique.length ? "ambiguous" : terminal ? "exhausted" : "missing", candidates: unique.slice(0, 12), chosen: automatic ? first : null };
   }
   const publicResult = result => ({ ...result, candidates: result.candidates.map(({ node, ...item }) => item), chosen: result.chosen ? (({ node, ...item }) => item)(result.chosen) : null });
-  root.SupplierNavigator = { analyze, publicResult, selectorFor, resolve, scopes, visible, disabled, accessibleName, scrollTargets };
+  root.SupplierNavigator = { analyze, publicResult, selectorFor, resolve, scopes, visible, disabled, accessibleName, scrollTargets, memo, withSample };
 })(globalThis);

@@ -3,9 +3,15 @@ const $ = id => document.getElementById(id);
 const labels = { running: "В работе", paused: "Пауза", stopped: "Остановлено", finished: "Завершено" };
 let state = null, selectedId = location.hash.slice(1), selected = null, refreshing = false, pending = false, busy = false;
 let draftImageSize = null, sizeRevision = 0;
+const P = globalThis.SupplierPrices, expandedSuppliers = new Set(), draftPreferences = {}, preferenceRevisions = {};
+const preference = (key, fallback) => draftPreferences[key] ?? state?.view_preferences?.[key] ?? fallback;
+function savePreference(key, value) {
+  const revision = (preferenceRevisions[key] || 0) + 1; preferenceRevisions[key] = revision; draftPreferences[key] = value; renderMemory();
+  void send("SET_VIEW", { [key]: value }).then(async () => { if (preferenceRevisions[key] === revision) { delete draftPreferences[key]; await refresh(); } }).catch(error => { if (preferenceRevisions[key] === revision) delete draftPreferences[key]; showError(error); });
+}
 function applyImageSize(size) {
   $("image-size").value = size; $("image-size-value").textContent = `${size} px`;
-  for (const img of $("memory-products").querySelectorAll(".history-thumbnail")) { img.width = size; img.height = size; }
+  for (const img of $("task-memory").querySelectorAll(".history-thumbnail")) { img.width = size; img.height = size; }
 }
 function element(tag, text, className) { const node = document.createElement(tag); if (text != null) node.textContent = text; if (className) node.className = className; return node; }
 function link(url, text) {
@@ -40,7 +46,7 @@ function renderList() {
 function renderMemory() {
   $("task-memory").hidden = !selected;
   if (!selected) {
-    $("memory-products").replaceChildren(); $("memory-pages").replaceChildren(); $("memory-log").replaceChildren();
+    $("memory-products").replaceChildren(); $("memory-suppliers").replaceChildren(); $("memory-pages").replaceChildren(); $("memory-log").replaceChildren();
     $("memory-title").textContent = ""; $("memory-meta").textContent = ""; $("memory-status").textContent = ""; $("memory-counts").textContent = ""; return;
   }
   $("memory-title").textContent = selected.query || "Проверка без метки";
@@ -55,8 +61,20 @@ function renderMemory() {
   applyImageSize(imageSize);
   $("toggle-images").textContent = showImages ? "Скрыть картинки" : "Показать картинки";
   $("toggle-images").setAttribute("aria-pressed", String(showImages));
-  const thumbnails = new Map([...$("memory-products").querySelectorAll("[data-image-key]")].map(node => [node.dataset.imageKey, node]));
-  $("memory-products").replaceChildren(...selected.products.map(product => {
+  const view = preference("history_view", "cards"), order = preference("history_price_order", "original");
+  $("memory-view").value = view; $("price-order").value = order;
+  const currencyLabel = currency => currency === "unspecified" ? "Без указанной валюты" : currency;
+  const currencies = [...new Set(selected.products.map(product => P.parse(product)?.currency).filter(Boolean))].sort();
+  const oldCurrency = $("price-currency").value;
+  $("price-currency").replaceChildren(...["", ...currencies].map(currency => { const option = element("option", currency ? currencyLabel(currency) : "Все валюты"); option.value = currency; return option; }));
+  $("price-currency").value = currencies.includes(oldCurrency) ? oldCurrency : "";
+  const currency = $("price-currency").value;
+  const products = P.sort(selected.products.filter(product => !currency || P.parse(product)?.currency === currency), order);
+  $("memory-visible").textContent = `Показано карточек: ${products.length} из ${selected.products.length}. Сортировка и выбор валюты не меняют память и выгрузку.`;
+  $("memory-empty").hidden = Boolean(products.length);
+  $("memory-cards-wrap").hidden = view !== "cards"; $("memory-suppliers-wrap").hidden = view !== "suppliers";
+  const thumbnails = new Map([...$("task-memory").querySelectorAll("[data-image-key]")].map(node => [node.dataset.imageKey, node]));
+  const productRow = product => {
     const row = element("tr"), name = element("td"); name.append(link(product.product_url, product.title || "Название не получено"), element("small", `ID: ${product.product_id}${product.page_index ? ` · Страница ${product.page_index}` : ""}${product.card_index ? ` · Позиция ${product.card_index}` : ""}`, "supplier-id"));
     const supplier = element("td"); supplier.append(link(product.supplier_url, product.shop_name || "Имя магазина не получено"), element("small", product.supplier_id || "", "supplier-id"));
     const image = element("td");
@@ -74,7 +92,26 @@ function renderMemory() {
       image.append(thumbnail);
     } else image.append(product.image_url ? link(product.image_url, "Открыть изображение ↗") : element("span", "—"));
     row.append(name, element("td", product.price || "—"), element("td", product.minimum_order || "—"), supplier, image, element("td", date(product.last_seen_at || product.collected_at))); return row;
-  }));
+  };
+  if (view === "cards") { $("memory-suppliers").replaceChildren(); $("memory-products").replaceChildren(...products.map(productRow)); }
+  else {
+    $("memory-products").replaceChildren();
+    const grouped = SupplierCollector.supplierGroups(products), groups = grouped.suppliers.map(group => ({ ...group, minimum: P.minimum(group.products) }));
+    if (order !== "original") groups.sort((a, b) => P.compare(a.minimum, b.minimum, order));
+    if (grouped.unresolved.length) groups.push({ key: "unknown", shop_name: "Поставщик неизвестен", products: grouped.unresolved, unknown: true });
+    const rows = [];
+    for (const group of groups) {
+      const key = selected.id + ":" + group.key, open = expandedSuppliers.has(key), row = element("tr"), name = element("td");
+      const button = element("button", `${open ? "▾" : "▸"} ${group.shop_name || (group.supplier_url ? new URL(group.supplier_url).hostname : "Поставщик " + group.supplier_id)}`, "supplier-name");
+      button.setAttribute("aria-expanded", String(open)); button.addEventListener("click", () => { if (expandedSuppliers.has(key)) expandedSuppliers.delete(key); else expandedSuppliers.add(key); renderMemory(); }); name.append(button);
+      const store = element("td"); store.append(link(group.supplier_url, group.supplier_url ? "Открыть магазин ↗" : "—"));
+      const minimum = element("td", group.minimum ? `${currencyLabel(group.minimum.currency)} ${new Intl.NumberFormat("ru-RU", { maximumSignificantDigits: 12 }).format(group.minimum.amount)}` : group.unknown ? "—" : group.products.some(product => P.parse(product)) ? "Несколько валют — выберите валюту" : "Цена не определена");
+      row.dataset.supplierKey = group.key; if (group.minimum) { row.dataset.price = group.minimum.amount; row.dataset.currency = group.minimum.currency; }
+      row.append(name, store, element("td", group.products.length), minimum); rows.push(row);
+      if (open) { const child = element("tr", null, "tree-row"), cell = element("td"), table = element("table", null, "supplier-table memory-products"), body = element("tbody"); cell.colSpan = 4; table.append($("memory-cards-wrap").querySelector("thead").cloneNode(true)); body.append(...P.sort(group.products, order).map(productRow)); table.append(body); cell.append(table); child.append(cell); rows.push(child); }
+    }
+    $("memory-suppliers").replaceChildren(...rows);
+  }
   $("memory-pages").replaceChildren(...selected.pages.map(page => { const item = element("li"); item.append(link(page.page_url, `${page.query || "Выдача"}${page.partial ? " · частично сохранена" : ""}`)); return item; }));
   $("memory-log").replaceChildren(...(selected.log || []).slice().reverse().map(entry => { const item = element("li"); item.append(element("time", date(entry.at)), element("span", entry.message)); return item; }));
 }
@@ -109,6 +146,9 @@ function requestDelete(id) {
   });
 }
 $("history-filter").addEventListener("input", renderList);
+$("memory-view").addEventListener("change", () => savePreference("history_view", $("memory-view").value));
+$("price-order").addEventListener("change", () => savePreference("history_price_order", $("price-order").value));
+$("price-currency").addEventListener("change", renderMemory);
 $("refresh").addEventListener("click", () => { void action(() => Promise.resolve()); });
 $("delete-task").addEventListener("click", () => requestDelete(selectedId));
 $("toggle-images").addEventListener("click", () => { void action(() => send("SET_VIEW", { history_images: state.view_preferences?.history_images !== true })); });

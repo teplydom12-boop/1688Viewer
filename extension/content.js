@@ -92,7 +92,11 @@
     if (products.some(item => !item.shop_name)) warnings.push("В выдаче не показаны названия части магазинов. Используйте проверку карточек товаров.");
     if (products.some(item => item.extraction_confidence < 90)) warnings.push("Часть карточек определена по структуре. Проверьте несколько строк перед большим сбором.");
     if (products.some(item => !item.product_url)) warnings.push("У части товаров нет доступной ссылки на карточку; автоматическая проверка таких товаров пропускается.");
-    if (diagnostics.data_truncated) warnings.push("Данные приложения превысили лимит анализа. Часть результатов могла быть пропущена.");
+    if (diagnostics.data_truncated) {
+      const labels = { time: "время чтения", records: "число записей", nodes: "объём структуры", children: "размер списка", queue: "очередь данных" };
+      const reasons = (diagnostics.data_truncation_reasons || []).map(reason => labels[reason] || reason);
+      warnings.push(`Часть дополнительных данных приложения не дочитана${reasons.length ? `: ${reasons.join(", ")}` : " из-за ограничения объёма"}. Найденные DOM-карточки сохранены; полнота страницы проверяется отдельно.`);
+    }
     if (diagnostics.price_conflicts) warnings.push(`У ${diagnostics.price_conflicts} товаров источники показывают разные цены. Сравните значения со страницей.`);
     products = products.map((item, index) => ({ ...item, card_index: index + 1 }));
     return { products, raw_cards: [...rawCards.values()], page: {
@@ -114,37 +118,44 @@
       products = S.mergeCardSamples(products, result.products); diagnostics = result.diagnostics;
       for (const card of result.raw_cards) rawCards.set(card.page_card_key, card);
     };
-    let accepting = false;
-    const watcher = SupplierObserver.watch(document, () => { if (accepting) absorb(extract(options.query, "search", options.raw !== false)); }, check);
+    let accepting = false, sampled = null, sampledRevision = -1, sampledData = "", sampledUrl = "";
+    const stateSignature = () => JSON.stringify([pageData.products, pageData.responses, pageData.pagination, pageData.diagnostics?.truncated, pageData.diagnostics?.truncation_reasons]);
+    const sample = (force = false) => {
+      check(); const revision = watcher.stats().business_revision, signature = stateSignature();
+      if (!force && sampled && sampledRevision === revision && sampledData === signature && sampledUrl === location.href) return sampled;
+      sampled = extract(options.query, "search", options.raw !== false); sampledRevision = revision; sampledData = signature; sampledUrl = location.href; return sampled;
+    };
+    const watcher = SupplierObserver.watch(document, () => { if (accepting) absorb(sample()); }, check);
     try {
       progress("loading", "Ожидаю загрузку выдачи…", 0);
       const ready = await waitForResults(options.query, options.previousFingerprint, "search", options.raw !== false, options);
-      accepting = true; absorb(ready);
-      await watcher.wait({ minMs: 350, maxMs: 1800 }); await refreshPageData();
-      absorb(extract(options.query, "search", options.raw !== false));
+      accepting = true; sampled = ready; sampledRevision = watcher.stats().business_revision; sampledData = stateSignature(); sampledUrl = location.href; absorb(ready);
+      await watcher.wait({ sampleAtEnd: false, minMs: 350, maxMs: 1800 }); await refreshPageData();
+      absorb(sample());
       let reachedBottom = false, stableAtBottom = 0;
       if (options.scroll) {
-        const targets = N.scrollTargets(document); targets.forEach(target => target.node.scrollTop = 0); await watcher.wait({ minMs: 350, maxMs: 1400 });
-        absorb(extract(options.query, "search", options.raw !== false));
+        const targets = N.scrollTargets(document); targets.forEach(target => target.node.scrollTop = 0); await watcher.wait({ sampleAtEnd: false, minMs: 350, maxMs: 1400 });
+        absorb(sample());
         for (let scrolls = 0; scrolls < 32; scrolls++) {
           check();
           progress("scrolling", `Догружаю выдачу: ${products.length} товаров, прокрутка ${scrolls + 1}.`, products.length);
           const before = products.length;
           const surfaces = N.scrollTargets(document);
           for (const target of surfaces) target.node.scrollTop += Math.max(200, target.node.clientHeight * 0.85);
-          await watcher.wait({ minMs: options.scroll_delay || 650, maxMs: Math.max(1600, (options.scroll_delay || 650) * 2) });
+          await watcher.wait({ sampleAtEnd: false, minMs: options.scroll_delay || 650, maxMs: Math.max(1600, (options.scroll_delay || 650) * 2) });
           await refreshPageData();
-          absorb(extract(options.query, "search", options.raw !== false));
+          absorb(sample());
           reachedBottom = surfaces.every(target => target.node.scrollTop + target.node.clientHeight >= target.node.scrollHeight - 12);
           stableAtBottom = reachedBottom && products.length === before ? stableAtBottom + 1 : 0;
           if (stableAtBottom >= 3) break;
         }
       }
+      absorb(sample(true));
       const warnings = options.scroll && !reachedBottom ? ["Достигнут предел прокрутки. Часть выдачи могла не загрузиться; соберите её вручную."] : [];
       let coverage = quality({ products, diagnostics }, options);
       if (!coverage.complete) {
         progress("loading", "Проверяю полноту выдачи перед сохранением…", products.length);
-        await watcher.wait({ minMs: 1500, maxMs: 3000 }); await refreshPageData(); absorb(extract(options.query, "search", options.raw !== false));
+        await watcher.wait({ sampleAtEnd: false, minMs: 1500, maxMs: 3000 }); await refreshPageData(); absorb(sample(true));
         coverage = quality({ products, diagnostics }, options);
         if (!coverage.complete) throw incomplete({ products, raw_cards: [...rawCards.values()], diagnostics }, coverage);
       }

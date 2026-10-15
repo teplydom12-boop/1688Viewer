@@ -36,9 +36,10 @@
   }
 
   function walk(data, options, method, confidence) {
-    const records = [], pagination = [], stack = [{ value: data, path: "" }]; let inspected = 0;
-    while (stack.length && inspected++ < 10000 && records.length < 600) {
+    const records = [], pagination = [], reasons = new Set(), seen = new WeakSet(), stack = [{ value: data, path: "" }]; let inspected = 0;
+    while (stack.length && inspected++ < 20000 && records.length < 2000) {
       const { value, path } = stack.pop(); if (!value || typeof value !== "object") continue;
+      if (seen.has(value)) continue; seen.add(value);
       if (!Array.isArray(value)) {
         const record = normalize(value, options); if (record) records.push({ ...record, method, confidence });
         if (/pagin|pager|pageInfo/i.test(path)) {
@@ -46,9 +47,15 @@
           if (typeof next === "string" || typeof value.hasNextPage === "boolean" || typeof value.hasMore === "boolean") pagination.push({ nextPageUrl: next, hasNextPage: value.hasNextPage ?? value.hasMore, currentPage: value.currentPage ?? value.pageNo ?? value.pageNum });
         }
       }
-      for (const [key, child] of Object.entries(value).slice(0, 300)) if (!privateKey.test(key) && child && typeof child === "object") stack.push({ value: child, path: `${path}.${key}`.slice(-200) });
+      const keys = Object.keys(value).filter(key => !privateKey.test(key) && !/^_(?:owner|store|debugInfo|debugOwner)$/.test(key));
+      const important = key => /^(?:products?|offers?|items?|results?|records?|list|data|props|children|payload|pagin\w*)$/i.test(key);
+      keys.sort((a, b) => Number(important(a)) - Number(important(b)));
+      const maximum = Array.isArray(value) ? 5000 : 1000;
+      if (keys.length > maximum) reasons.add("children");
+      for (const key of keys.slice(-maximum)) { const child = Object.getOwnPropertyDescriptor(value, key)?.value; if (child && typeof child === "object") stack.push({ value: child, path: `${path}.${key}`.slice(-200) }); }
     }
-    return { records, pagination, truncated: stack.length > 0 };
+    if (stack.length) reasons.add(records.length >= 2000 ? "records" : "nodes");
+    return { records, pagination, truncated: reasons.size > 0, truncation_reasons: [...reasons] };
   }
 
   function jsonPrefix(text, offset) {
@@ -108,8 +115,8 @@
     return record ? [{ ...record, method: "open-graph", confidence: 95 }] : [];
   }
   function extract(doc, options = {}) {
-    const records = [], pagination = []; let truncated = false;
-    const add = result => { records.push(...result.records); pagination.push(...result.pagination); truncated ||= result.truncated; };
+    const records = [], pagination = [], truncationReasons = new Set(); let truncated = false;
+    const add = result => { records.push(...result.records); pagination.push(...result.pagination); truncated ||= result.truncated; for (const reason of result.truncation_reasons || []) truncationReasons.add(reason); };
     for (const scope of root.SupplierNavigator.scopes(doc)) {
       const location = scope.URL || scope.ownerDocument?.URL;
       const scopedOptions = { ...options, url: S.webUrl(location) ? location : options.url };
@@ -130,7 +137,8 @@
     for (const item of options.pageData?.responses || []) { const record = normalize(item, options); if (record) records.push({ ...record, method: "observed-response", confidence: 95 }); }
     pagination.push(...(options.pageData?.pagination || []));
     records.push(...metadata(doc, options));
-    return { records, pagination: cleanPagination(pagination, options.url), truncated: truncated || options.pageData?.diagnostics?.truncated || false };
+    for (const reason of options.pageData?.diagnostics?.truncation_reasons || []) truncationReasons.add(reason);
+    return { records, pagination: cleanPagination(pagination, options.url), truncated: truncated || options.pageData?.diagnostics?.truncated || false, truncation_reasons: [...truncationReasons], component_discovery_limited: options.pageData?.diagnostics?.component_discovery_limited || false };
   }
   function cleanPagination(items, url) {
     return items.slice(0, 30).map(item => {
