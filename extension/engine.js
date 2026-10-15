@@ -4,7 +4,13 @@
   const ANCHORS = 'a[href], [data-snapshot-anchor][href]';
   const normalizedClass = node => String(node.className || "").toLowerCase().replace(/[-_]/g, "");
   const classNodes = (node, patterns) => [...node.querySelectorAll("[class]")].filter(item => patterns.some(pattern => normalizedClass(item).includes(pattern)));
-  const text = node => node ? S.text(node.getAttribute("content") || node.textContent) : null;
+  function businessText(node) {
+    if (!node) return null;
+    const parts = [], walker = node.ownerDocument.createTreeWalker(node, 4, { acceptNode: child => child.parentElement?.closest("script,style,template,noscript") ? 2 : 1 });
+    while (walker.nextNode()) parts.push(walker.currentNode.nodeValue);
+    return S.text(parts.join(""));
+  }
+  const text = node => node ? S.text(node.getAttribute("content")) || businessText(node) : null;
   const usefulName = value => {
     const name = S.text(value);
     return name && !/^(查看详情|立即购买|详情|购买|进店|进入店铺|联系卖家|店铺|旺铺|contact supplier|visit store|view details|company profile)$/i.test(name) && !/^[¥￥$\d\s.,~–\-/元件个]+$/.test(name) ? name.slice(0, 500) : null;
@@ -45,10 +51,10 @@
 
   function cardFor(node, offer, url) {
     let selected = node;
-    for (let depth = 0, current = node; current && depth < 7; depth++, current = current.parentElement) {
+    for (let depth = 0, current = node; current && depth < 14; depth++, current = current.parentElement) {
       if (["BODY", "HTML", "MAIN"].includes(current.tagName)) break;
       if (idsIn(current, url).size > 1) break;
-      if ((current.textContent || "").length > 6000) break;
+      if ((text(current) || "").length > 6000) break;
       selected = current;
       if (CARD_PATTERN.test(normalizedClass(current)) || current.hasAttribute("data-renderkey") || current.hasAttribute("data-offer-id")) return current;
     }
@@ -84,17 +90,7 @@
       .map(node => ({ node, url: S.supplierUrl(node.getAttribute("href"), url) })).find(item => item.url);
     const shopName = firstText(classNodes(card, ["companyname", "shopname", "suppliername", "sellername"]), snapshot) ||
       usefulName(supplierLink?.node.getAttribute("title")) || usefulName(text(supplierLink?.node));
-    const images = [...(anchor.querySelectorAll("img")), ...card.querySelectorAll("img")];
-    let imageUrl = null;
-    for (const image of images) {
-      if (/icon|logo|divider|star/i.test(String(image.className))) continue;
-      for (const value of [image.getAttribute("data-src"), image.getAttribute("data-lazy-src"), image.getAttribute("data-original"), image.currentSrc, image.getAttribute("src")]) {
-        if (!value || /placeholder|transparent|loading\.gif|spacer/i.test(value)) continue;
-        imageUrl = S.httpUrl(value, url);
-        if (imageUrl) break;
-      }
-      if (imageUrl) break;
-    }
+    const imageUrl = root.SupplierGeneric.image(card, url);
     return { title, price, minimum_order: minimumOrder, shop_name: shopName, supplier_url: supplierLink?.url || null, image_url: imageUrl };
   }
 
@@ -216,7 +212,12 @@
     const rawCards = new Map();
     const records = [];
     const currentOffer = S.productUrl(url, url, generic);
+    const known = new Set((options.known_fingerprint || "").split(",").filter(Boolean));
+    const domKeys = new Set(candidates.filter(candidate => candidate.anchor).map(candidate => `${candidate.offer.url ? S.site(candidate.offer.url) : source}:${candidate.offer.id}`));
+    const hasFreshDOM = [...domKeys].some(key => !known.has(key));
     for (const candidate of candidates) {
+      const key = `${candidate.offer.url ? S.site(candidate.offer.url) : source}:${candidate.offer.id}`;
+      if (mode === "search" && hasFreshDOM && !candidate.anchor && known.has(key) && !domKeys.has(key)) continue;
       if (!generic && candidate.offer.url && S.marketplace(candidate.offer.url) !== source) continue;
       if (mode === "detail" && candidate.offer.id !== currentOffer.id) continue;
       const inferred = ["learned-card", "semantic-card", "repeated-card-structure", "linked-card-cluster", "visual-card-layout", "microdata", "rdfa", "microformats"].includes(candidate.method);
@@ -239,6 +240,7 @@
         const html = sanitizedCard(card, url);
         const old = rawCards.get(rawKey);
         if (html && (!old || html.length > old.html.length)) rawCards.set(rawKey, { product_id: record.product_id, source: record.source, source_page_url: url, collected_at: timestamp, html });
+        else if (!html && !old) rawCards.set(rawKey, { product_id: record.product_id, source: record.source, source_page_url: url, collected_at: timestamp, html: "", record });
       } else if (raw && !rawCards.has(rawKey)) {
         rawCards.set(rawKey, { product_id: record.product_id, source: record.source, source_page_url: url, collected_at: timestamp, html: "", record });
       }
@@ -265,13 +267,43 @@
       }
     }
     return { products, raw_cards: [...rawCards.values()], diagnostics: {
-      engine_version: "0.4.0", source, methods: [...new Set(candidates.map(item => item.method))],
+      engine_version: "0.7.0", source, methods: [...new Set(candidates.map(item => item.method))], expected_page_size: expectedPageSize(doc, url), page_context: mode === "search" ? pageContext(doc, url) : null,
       data_truncated: Boolean(additions.truncated), pagination: additions.pagination,
       price_conflicts: conflicting.length,
       inferred_cards: products.filter(item => item.extraction_confidence < 90).length, no_detail_links: products.filter(item => !item.product_url).length,
       missing_supplier_names: products.filter(item => !item.shop_name).length,
       missing_supplier_identity: products.filter(item => !item.supplier_id && !item.supplier_url).length
     } };
+  }
+  function expectedPageSize(doc, url) {
+    const sizes = [];
+    const add = value => { const size = Number(value); if (Number.isInteger(size) && size >= 1 && size <= 1000) sizes.push(size); };
+    for (const [key, value] of new URL(url).searchParams) if (/^(?:page[_-]?size|per[_-]?page|itemsPerPage)$/i.test(key)) add(value);
+    for (const scope of root.SupplierNavigator.scopes(doc)) {
+      for (const node of scope.querySelectorAll('[data-page-size],[data-page_size],select[name="pageSize"],select[name="page_size"]')) add(node.getAttribute("data-page-size") || node.getAttribute("data-page_size") || node.value);
+      if (S.marketplace(url) === "1688") for (const node of [...scope.querySelectorAll("[data-renderkey]")].slice(0, 80)) {
+        for (const attr of node.attributes) { const size = attr.value.match(/(?:^|[\^&])page_size@(\d+)(?:\^|$)/); if (size) add(size[1]); }
+      }
+    }
+    return sizes.length && new Set(sizes).size === 1 ? sizes[0] : null;
+  }
+  function pageContext(doc, url) {
+    const address = new URL(url);
+    let urlPage = null;
+    for (const [key, value] of address.searchParams) if (/^(?:beginPage|page|pageNo|pageNum|currentPage)$/i.test(key) && /^\d+$/.test(value) && Number(value) >= 1) { urlPage = Number(value); break; }
+    const pages = [];
+    for (const scope of root.SupplierNavigator.scopes(doc)) {
+      if (S.marketplace(url) === "1688") for (const node of [...scope.querySelectorAll("[data-renderkey]")].slice(0, 80)) {
+        for (const attr of node.attributes) { const found = attr.value.match(/(?:^|[\^&])page_num@(\d+)(?:\^|$)/); if (found && Number(found[1]) >= 1) { pages.push(Number(found[1])); break; } }
+      }
+    }
+    if (!pages.length) for (const scope of root.SupplierNavigator.scopes(doc)) for (const node of scope.querySelectorAll('[aria-current="page"]')) {
+      if (node.closest('nav,[class*="pagin"],[class*="pager"]') && /^\d+$/.test(text(node) || "")) pages.push(Number(text(node)));
+    }
+    const frequencies = new Map(); for (const page of pages) frequencies.set(page, (frequencies.get(page) || 0) + 1);
+    const ranked = [...frequencies].sort((a, b) => b[1] - a[1]);
+    const rendered = ranked[0]?.[0] || null, mixed = ranked.length > 1 && ranked[0][1] / pages.length < 0.9;
+    return { url_page: urlPage, rendered_page: rendered, mixed, mismatch: urlPage != null && rendered != null && urlPage !== rendered };
   }
 
   function reparse(cards) {
@@ -290,5 +322,5 @@
     const doc = new DOMParser().parseFromString(preserved, "text/html");
     return extract(doc, { ...options, snapshot: true });
   }
-  root.SupplierCollectorEngine = { extract, reparse, sanitizedCard, fromHTML };
+  root.SupplierCollectorEngine = { extract, reparse, sanitizedCard, fromHTML, expectedPageSize, pageContext };
 })(globalThis);

@@ -9,6 +9,7 @@
   let collecting = false;
   let cancelled = false;
   let pageData = { products: [], pagination: [] }, dataReadAt = 0;
+  let knownFingerprint = "";
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   function visible(element) {
@@ -46,7 +47,7 @@
   function extract(label, mode = "search", raw = true) {
     check();
     if (mode === "search" && S.productUrl(location.href, location.href)) throw new Error("Откройте страницу поисковой выдачи, а не карточку товара.");
-    return E.extract(document, { url: location.href, label, mode, raw, profile, pageData });
+    return E.extract(document, { url: location.href, label, mode, raw, profile, pageData, known_fingerprint: knownFingerprint });
   }
   async function refreshPageData(force = false) {
     check();
@@ -58,15 +59,29 @@
   }
   function readPage(label) { return extract(label).products; }
 
-  async function waitForResults(label, previousFingerprint, mode, raw) {
+  function quality(result, options, initial = false) {
+    const terminal = N.analyze(document, { url: location.href, profile: profile.navigation, pagination: result.diagnostics.pagination || [] }).decision === "exhausted";
+    return S.collectionQuality(result.products, { known_keys: (options.known_fingerprint || "").split(",").filter(Boolean), expected_count: result.diagnostics.expected_page_size || options.expected_count, check_count: options.scroll === true, initial, terminal, page_context: result.diagnostics.page_context, append_mode: options.append_mode === true });
+  }
+  function incomplete(result, coverage) {
+    const error = new Error(`Полнота страницы не подтверждена: найдено ${coverage.observed_count} товаров, новых ${coverage.new_count}, повторных ${coverage.repeated_count}${coverage.expected_count ? `; ориентир ${coverage.expected_count}` : ""}${coverage.reason === "page-mismatch" ? `; адрес страницы ${coverage.url_page ?? "не указан"}, загружена выдача ${coverage.rendered_page ?? "смешанных страниц"}` : ""}. Дождитесь загрузки выдачи и нажмите «Продолжить». Страница не засчитана.`);
+    error.code = "INCOMPLETE_RESULTS"; error.candidate = result; error.coverage = coverage; return error;
+  }
+  async function waitForResults(label, previousFingerprint, mode, raw, options = {}) {
     const deadline = Date.now() + 15000;
     const previousIds = new Set((previousFingerprint || "").split(","));
+    let pending;
     while (Date.now() < deadline) {
       await refreshPageData();
       const result = extract(label, mode, raw);
-      if (result.products.length && (!previousFingerprint || result.products.some(item => !previousIds.has(`${item.source}:${item.product_id}`) && !previousIds.has(item.product_id)))) return result;
+      if (result.products.length) {
+        const coverage = quality(result, options, true);
+        if (!coverage.complete) pending = { result, coverage };
+        else if (!previousFingerprint || result.products.some(item => !previousIds.has(`${item.source}:${item.product_id}`) && !previousIds.has(item.product_id))) return result;
+      }
       await delay(400);
     }
+    if (pending) throw incomplete(pending.result, pending.coverage);
     throw new Error(previousFingerprint ? "Выдача после перехода не изменилась. Проверьте страницу и продолжите сбор." : "Товары не найдены. Дождитесь загрузки; для этой страницы могут понадобиться дополнительные правила извлечения.");
   }
 
@@ -87,7 +102,8 @@
   async function collect(options = {}) {
     profile = options.profile || profile;
     if (collecting) throw new Error("Сбор этой страницы уже идёт.");
-    collecting = true; cancelled = false;
+    collecting = true; cancelled = false; knownFingerprint = options.known_fingerprint || "";
+    pageData = { products: [], pagination: [] }; dataReadAt = 0;
     let products = [];
     const rawCards = new Map();
     let diagnostics = {};
@@ -95,10 +111,12 @@
       products = S.mergeProducts(products, result.products); diagnostics = result.diagnostics;
       for (const card of result.raw_cards) rawCards.set(`${card.source}:${card.product_id}`, card);
     };
-    const watcher = SupplierObserver.watch(document, () => absorb(extract(options.query, "search", options.raw !== false)), check);
+    let accepting = false;
+    const watcher = SupplierObserver.watch(document, () => { if (accepting) absorb(extract(options.query, "search", options.raw !== false)); }, check);
     try {
       progress("loading", "Ожидаю загрузку выдачи…", 0);
-      absorb(await waitForResults(options.query, options.previousFingerprint, "search", options.raw !== false));
+      const ready = await waitForResults(options.query, options.previousFingerprint, "search", options.raw !== false, options);
+      accepting = true; absorb(ready);
       await watcher.wait({ minMs: 350, maxMs: 1800 }); await refreshPageData();
       absorb(extract(options.query, "search", options.raw !== false));
       let reachedBottom = false, stableAtBottom = 0;
@@ -120,11 +138,25 @@
         }
       }
       const warnings = options.scroll && !reachedBottom ? ["Достигнут предел прокрутки. Часть выдачи могла не загрузиться; соберите её вручную."] : [];
-      return pageResult(products, rawCards, { ...diagnostics, ...watcher.stats() }, options.query, warnings);
+      let coverage = quality({ products, diagnostics }, options);
+      if (!coverage.complete) {
+        progress("loading", "Проверяю полноту выдачи перед сохранением…", products.length);
+        await watcher.wait({ minMs: 1500, maxMs: 3000 }); await refreshPageData(); absorb(extract(options.query, "search", options.raw !== false));
+        coverage = quality({ products, diagnostics }, options);
+        if (!coverage.complete) throw incomplete({ products, raw_cards: [...rawCards.values()], diagnostics }, coverage);
+      }
+      return pageResult(products, rawCards, { ...diagnostics, ...watcher.stats(), collection_quality: coverage }, options.query, warnings);
     } catch (error) {
-      if (products.length) error.partial = pageResult(products, rawCards, diagnostics, options.query, ["Страница собрана частично: работа была прервана."]);
+      if (error.code === "INCOMPLETE_RESULTS") {
+        const known = new Set(knownFingerprint.split(","));
+        const candidate = error.candidate;
+        products = error.coverage.reason === "page-mismatch" ? [] : candidate.products.filter(item => !known.has(`${item.source}:${item.product_id}`)); rawCards.clear();
+        for (const card of candidate.raw_cards || []) if (error.coverage.reason !== "page-mismatch" && !known.has(`${card.source}:${card.product_id}`)) rawCards.set(`${card.source}:${card.product_id}`, card);
+        diagnostics = { ...candidate.diagnostics, collection_quality: error.coverage };
+        error.partial = pageResult(products, rawCards, diagnostics, options.query, [error.message]);
+      } else if (products.length) error.partial = pageResult(products, rawCards, diagnostics, options.query, ["Страница собрана частично: работа была прервана."]);
       throw error;
-    } finally { watcher.stop(); collecting = false; }
+    } finally { watcher.stop(); collecting = false; knownFingerprint = ""; }
   }
 
   async function detail(options = {}) {

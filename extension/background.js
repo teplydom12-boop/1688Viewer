@@ -176,12 +176,23 @@ async function saveSearch(id, result, partial = false) {
   return withStateLock(async () => {
     const { run, collection = emptyCollection() } = await chrome.storage.local.get(["run", "collection"]);
     if (run?.id !== id || (!partial && run.status !== "running")) return null;
+    if (!partial) {
+      const known = run.seen_fingerprints.flatMap(value => value.split(",").filter(Boolean));
+      const coverage = S.collectionQuality(result.products, { known_keys: known, expected_count: result.page.diagnostics?.expected_page_size || run.previous_fingerprint?.split(",").length, check_count: run.scroll, terminal: result.page.diagnostics?.collection_quality?.terminal, page_context: result.page.diagnostics?.page_context, append_mode: run.collection_mode === "append" });
+      if (!coverage.complete) {
+        const error = new Error(`Страница не засчитана: найдено ${coverage.observed_count}, новых ${coverage.new_count}, повторных ${coverage.repeated_count}. Дождитесь загрузки выдачи и нажмите «Продолжить».`);
+        error.code = "INCOMPLETE_RESULTS";
+        const knownSet = new Set(known);
+        error.partial = { ...result, products: coverage.reason === "page-mismatch" ? [] : result.products.filter(item => !knownSet.has(productKey(item))), raw_cards: coverage.reason === "page-mismatch" ? [] : (result.raw_cards || []).filter(card => !knownSet.has(productKey(card))), page: { ...result.page, diagnostics: { ...result.page.diagnostics, collection_quality: coverage }, warnings: [...(result.page.warnings || []), error.message] } };
+        throw error;
+      }
+    }
     result = { ...result, products: result.products.map(item => ({ ...item, task_ids: [id] })), page: result.page ? { ...result.page, task_id: id } : null, raw_cards: (result.raw_cards || []).map(card => ({ ...card, task_id: id })) };
     if (!partial && run.seen_fingerprints.includes(result.page.fingerprint)) throw new Error("Повторилась уже собранная выдача. Проверьте страницу и продолжите сбор.");
     const merged = mergeResult(collection, result, partial, `${id}:${run.completed_pages}`);
     const keys = [...new Set([...(run.product_keys || []), ...result.products.map(productKey)])];
     let next = { ...run, product_keys: keys };
-    if (!partial) next = logEntry({ ...next, completed_pages: run.completed_pages + 1, previous_fingerprint: result.page.fingerprint, seen_fingerprints: [...run.seen_fingerprints, result.page.fingerprint], phase: "navigate" }, "saved", `Сохранена страница ${run.completed_pages + 1}: ${result.products.length} товаров. Всего: ${merged.products.length}.`);
+    if (!partial) next = logEntry({ ...next, completed_pages: run.completed_pages + 1, previous_fingerprint: result.page.fingerprint, last_page_url: result.page.page_url, seen_fingerprints: [...run.seen_fingerprints, result.page.fingerprint], phase: "navigate" }, "saved", `Сохранена страница ${run.completed_pages + 1}: ${result.products.length} товаров. В задании: ${keys.length}. В общей памяти: ${merged.products.length}.`);
     await persistState({ collection: merged, run: next }, result, partial);
     return { run: next, count: merged.products.length };
   });
@@ -258,7 +269,8 @@ async function awaitNavigation(run) {
     }
     if (matches.length === 1 && !inaccessible.length && (pending.exact_tab_id != null || Date.now() - pending.started_at >= 800)) {
       const target = matches[0];
-      await updateRun(run.id, task => logEntry({ ...task, tab_id: target.id, phase: "search", pending_navigation: null, navigation: null }, "loading", target.id !== pending.source_tab_id ? "Следующая выдача открылась в новой вкладке. Переключаю сбор на неё." : "Переход подтверждён: появились новые товары.")); return;
+      const append = pending.candidate.kind === "load-more" && S.canonicalUrl(target.url) === S.canonicalUrl(pending.source_url);
+      await updateRun(run.id, task => logEntry({ ...task, tab_id: target.id, phase: "search", collection_mode: append ? "append" : "replace", pending_navigation: null, navigation: null }, "loading", target.id !== pending.source_tab_id ? "Следующая выдача открылась в новой вкладке. Переключаю сбор на неё." : "Переход подтверждён: появились новые товары.")); return;
     }
     if (matches.length > 1 || inaccessible.length && targetIds.length > 1 && pending.exact_tab_id == null) {
       await updateRun(run.id, task => ({ ...task, navigation_tabs: targetIds }));
@@ -279,7 +291,7 @@ async function navigateStep(run) {
   const tab = await chrome.tabs.get(run.tab_id), profile = await siteProfile(tab.url);
   const peek = await sendToTab(run.tab_id, "PEEK", { profile, query: run.query });
   const previous = new Set(run.previous_fingerprint.split(","));
-  if (peek.products.some(item => !previous.has(productKey(item)))) { await updateRun(run.id, current => ({ ...current, phase: "search" })); return; }
+  if (peek.products.some(item => !previous.has(productKey(item)))) { await updateRun(run.id, current => ({ ...current, phase: "search", collection_mode: S.canonicalUrl(tab.url) === S.canonicalUrl(run.last_page_url) ? current.collection_mode : "replace" })); return; }
   const navigation = await sendToTab(run.tab_id, "NAVIGATE_OPTIONS", { profile });
   const selected = run.chosen_navigation ? navigation.candidates.find(item => item.id === run.chosen_navigation) : navigation.chosen;
   await updateRun(run.id, current => ({ ...current, navigation }));
@@ -317,13 +329,13 @@ async function processRun() {
     }
     await waitForTab(run.tab_id, id);
     const tab = await chrome.tabs.get(run.tab_id);
-    const result = await sendToTab(run.tab_id, "COLLECT", { query: run.query, scroll: run.scroll, raw: run.raw, profile: await siteProfile(tab.url), previousFingerprint: run.previous_fingerprint, scroll_delay: run.interval_ms >= 5000 ? 1000 : 650 });
+    const result = await sendToTab(run.tab_id, "COLLECT", { query: run.query, scroll: run.scroll, raw: run.raw, profile: await siteProfile(tab.url), previousFingerprint: run.previous_fingerprint, known_fingerprint: run.seen_fingerprints.join(","), expected_count: run.previous_fingerprint?.split(",").length || null, append_mode: run.collection_mode === "append", scroll_delay: run.interval_ms >= 5000 ? 1000 : 650 });
     const saved = await saveSearch(id, result); if (!saved) return;
     if (saved.run.completed_pages >= saved.run.max_pages) await beginDetails(id);
   } catch (error) {
     if (id && error.partial) await saveSearch(id, error.partial, true);
     if (id && error.code === "ACCESS") { await pauseAccess(id, error); return; }
-    if (id) await finish(id, "paused", error.message, error.code === "CHALLENGE" ? "challenge" : error.code === "RATE_LIMIT" ? "rate-limit" : "error");
+    if (id) await finish(id, "paused", error.message, error.code === "CHALLENGE" ? "challenge" : error.code === "RATE_LIMIT" ? "rate-limit" : error.code === "INCOMPLETE_RESULTS" ? "incomplete-results" : "error");
   } finally {
     processing = false;
     const { run } = await chrome.storage.local.get("run");
@@ -384,7 +396,7 @@ async function resumeRun(options = {}) {
     if (!run || !["paused", "stopped"].includes(run.status)) throw new Error("Нет приостановленного задания.");
     const interval = Number(options.interval_seconds ?? run.interval_ms / 1000);
     if (!Number.isFinite(interval) || interval < 1 || interval > 30) throw new Error("Укажите паузу от 1 до 30 секунд.");
-    if (options.tab_id != null && run.phase !== "details") { const selected = await chrome.tabs.get(Number(options.tab_id)); await ensureAccess(selected.url); run.tab_id = selected.id; run.phase = "search"; run.pending_navigation = null; run.navigation = null; }
+    if (options.tab_id != null && run.phase !== "details") { const selected = await chrome.tabs.get(Number(options.tab_id)); await ensureAccess(selected.url); run.tab_id = selected.id; run.phase = "search"; run.pending_navigation = null; run.navigation = null; run.collection_mode = "replace"; }
     const tabId = run.phase === "details" ? run.detail_tab_id : run.tab_id;
     let reloadForResponses = false;
     if (tabId != null) {
@@ -410,10 +422,13 @@ async function getState(full = false) {
   const { collection = emptyCollection(), run = null, preferences = null, last_navigation = null, tasks = [], profiles = {} } = await chrome.storage.local.get(["collection", "run", "preferences", "last_navigation", "tasks", "profiles"]);
   const history = storedTasks(tasks, run, collection);
   const groups = S.supplierGroups(collection.products);
+  const current = history.find(task => task.id === run?.id);
+  const currentGroups = current ? S.supplierGroups(current.products) : null;
   return { tasks: history.map(taskSummary).reverse(), task_count: history.length, can_clear: Boolean(history.length || collection.products.length || collection.raw_cards?.length || preferences || Object.keys(profiles).length || last_navigation), count: collection.products.length, page_count: collection.pages.filter(page => !page.partial).length,
     supplier_count: groups.suppliers.length, unresolved_count: groups.unresolved.length, missing_names: collection.products.filter(item => !item.shop_name).length,
     raw_count: (collection.raw_cards || []).length, preview: collection.products.slice(-4).reverse(),
-    warnings: collection.pages.at(-1)?.warnings || [], run, preferences, navigation: last_navigation?.analysis || run?.navigation || null,
+    current_task: current ? { product_count: current.products.length, supplier_count: currentGroups.suppliers.length, page_count: current.completed_pages, preview: current.products.slice(-4).reverse() } : null,
+    warnings: run ? current?.pages.at(-1)?.warnings || [] : collection.pages.at(-1)?.warnings || [], run, preferences, navigation: last_navigation?.analysis || run?.navigation || null,
     ...(full ? { products: collection.products, suppliers: groups.suppliers, unresolved: groups.unresolved } : {}) };
 }
 async function getTask(id) {

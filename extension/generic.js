@@ -12,12 +12,23 @@
   function image(card, url, profile = {}) {
     const remembered = S.httpUrl(card.getAttribute("data-image-url"), url); if (remembered) return remembered;
     const selected = query(card, profile.image);
-    const images = selected ? [selected] : nodes(card, 'img, [itemprop="image"], [property$=":image"], [role="img"]');
+    const score = node => {
+      const width = parseFloat(node.getAttribute("width") || node.style?.width || "0"), height = parseFloat(node.getAttribute("height") || node.style?.height || "0");
+      if (width > 0 && height > 0 && width <= 40 && height <= 40) return -100;
+      if (node.closest('[class*="icon"],[class*="badge"],[class*="logo"],[class*="rating"],[class*="star"]')) return -100;
+      const anchor = node.closest('a[href],[data-snapshot-anchor][href]');
+      return (width >= 100 || height >= 100 ? 30 : 0) + (anchor && S.productUrl(anchor.getAttribute("href"), url) ? 40 : 0) + (/product|main.*img|photo|picture/i.test(node.className || "") ? 20 : 0);
+    };
+    const images = selected ? [selected] : nodes(card, 'img, [itemprop="image"], [property$=":image"], [role="img"]').sort((a, b) => score(b) - score(a));
     for (const node of images) {
+      if (!selected && score(node) < 0) continue;
       if (/icon|logo|star|badge/i.test(node.getAttribute("class") || "")) continue;
       const responsive = (node.getAttribute("srcset") || node.getAttribute("data-srcset") || "").split(",").map(item => item.trim().split(/\s+/)).sort((a, b) => parseFloat(b[1] || "0") - parseFloat(a[1] || "0"))[0]?.[0];
       for (const raw of [node.getAttribute("data-src"), node.getAttribute("data-lazy-src"), node.getAttribute("data-original"), node.currentSrc, node.getAttribute("src"), node.getAttribute("content"), responsive]) {
-        if (!raw || /placeholder|spacer|loading\.gif/i.test(raw)) continue;
+        if (!raw || /placeholder|transparent|spacer|loading\.gif/i.test(raw)) continue;
+        if (/\/(?:flags|icons|logos)\//i.test(raw)) continue;
+        const dimensions = raw.match(/(?:[-_/])(\d{1,3})-(\d{1,3})\.(?:svg|png|gif)(?:[?!_]|$)/i);
+        if (!selected && dimensions && Number(dimensions[1]) <= 40 && Number(dimensions[2]) <= 40) continue;
         const safe = S.httpUrl(raw, url); if (safe) return safe;
       }
     }

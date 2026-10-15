@@ -86,6 +86,7 @@
     try {
       const url = new URL(value, base);
       if (!["http:", "https:"].includes(url.protocol)) return null;
+      if (productUrl(url.href)) return null;
       const source = marketplace(`https://${url.hostname}/`);
       if (source === "alibaba" && /^[a-z0-9-]+\.en\.alibaba\.com$/.test(url.hostname)) return `https://${url.hostname}/`;
       if (source === "made-in-china" && /^[a-z0-9-]+\.en\.made-in-china\.com$/.test(url.hostname)) return `https://${url.hostname}/`;
@@ -164,6 +165,19 @@
   function fingerprint(products) {
     return [...new Set(products.map(item => `${item.source}:${item.product_id}`))].sort().join(",");
   }
+  function collectionQuality(products, options = {}) {
+    const known = new Set(options.known_keys || []);
+    const observed = new Set(products.map(item => `${item.source}:${item.product_id}`));
+    const fresh = [...observed].filter(key => !known.has(key)).length;
+    const expected = Math.max(0, Number(options.expected_count) || 0);
+    const repeated = observed.size - fresh;
+    const stale = !options.append_mode && known.size >= 12 && observed.size >= 12 && repeated / observed.size >= 0.9 && fresh <= Math.max(1, Math.floor(observed.size * 0.1));
+    const minimum = options.initial ? Math.min(12, Math.ceil(expected * 0.2)) : Math.ceil(expected * 0.9);
+    const short = options.check_count && !options.terminal && expected >= 12 && observed.size < minimum;
+    const context = options.page_context || {};
+    const mismatched = !options.append_mode && (context.mismatch || context.mixed);
+    return { complete: !stale && !short && !mismatched, observed_count: observed.size, new_count: fresh, repeated_count: repeated, expected_count: expected || null, terminal: Boolean(options.terminal), url_page: context.url_page ?? null, rendered_page: context.rendered_page ?? null, reason: mismatched ? "page-mismatch" : stale ? "stale-results" : short ? "short-results" : null };
+  }
 
   function supplierGroups(products) {
     const parent = new Map();
@@ -234,7 +248,7 @@
     });
   }
 
-  const api = { text, quantity, marketplace, isMarketplaceUrl, webUrl, site, originPattern, digest, canonicalUrl, dangerousUrl, productUrl, supplierUrl, httpUrl, detectSearch, mergeProducts, fingerprint, supplierGroups, csv, importProducts };
+  const api = { text, quantity, marketplace, isMarketplaceUrl, webUrl, site, originPattern, digest, canonicalUrl, dangerousUrl, productUrl, supplierUrl, httpUrl, detectSearch, mergeProducts, fingerprint, collectionQuality, supplierGroups, csv, importProducts };
   root.SupplierCollector = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(globalThis);

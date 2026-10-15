@@ -43,19 +43,28 @@
       return `<c r="${ref}" t="inlineStr"${style}><is><t xml:space="preserve">${xml(String(text ?? "").slice(0, 32767))}</t></is></c>`;
     }).join("") + "</row>").join("") + `</sheetData><autoFilter ref="A1:${last}"/></worksheet>`;
   }
+  function sourceSite(item) {
+    const known = { "1688": "1688.com", "alibaba": "alibaba.com", "made-in-china": "made-in-china.com" };
+    if (known[item.source]) return known[item.source];
+    try { const url = new URL(item.source_page_url || item.source_url || item.product_url || item.supplier_url); return url.hostname; } catch { return String(item.source || "").replace(/^web:/, ""); }
+  }
+  function sourceOrigin(item) {
+    try { return new URL(item.source_page_url || item.source_url || item.product_url).origin; } catch { return sourceSite(item) ? `https://${sourceSite(item)}/` : ""; }
+  }
   function workbook(output) {
     const columns = [
-      ["source", "Площадка"], ["product_id", "ID товара"], ["title", "Название"], ["product_url", "Ссылка на товар"],
+      ["source_site", "Сайт-источник"], ["product_id", "ID товара"], ["title", "Название"], ["product_url", "Ссылка на товар"],
       ["supplier_id", "ID поставщика"], ["shop_name", "Магазин"], ["supplier_url", "Ссылка на поставщика"],
       ["price", "Цена"], ["minimum_order", "Минимальный заказ"], ["image_url", "Изображение"],
       ["query", "Запрос"], ["search_type", "Тип поиска"], ["collected_at", "Первый сбор (UTC)"], ["last_seen_at", "Последний сбор (UTC)"],
-      ["source_page_url", "Страница выдачи"], ["task_ids", "ID заданий"]
+      ["source_page_url", "Страница выдачи"], ["task_ids", "ID заданий"], ["source_origin", "Адрес сайта-источника"]
     ];
-    const tasks = output.tasks || [], taskProducts = tasks.flatMap(task => task.products.map(product => [task.id, task.query, ...columns.map(([key]) => product[key])]));
+    const value = (item, key) => key === "source_site" ? sourceSite(item) : key === "source_origin" ? sourceOrigin(item) : item[key];
+    const tasks = output.tasks || [], taskProducts = tasks.flatMap(task => task.products.map(product => [task.id, task.query, ...columns.map(([key]) => value(product, key))]));
     const sheets = [
-      ["Товары", [columns.map(([, title]) => title), ...output.products.map(product => columns.map(([key]) => product[key]))]],
-      ["Поставщики", [["Площадка", "ID поставщика", "Магазин", "Ссылка", "Найдено товаров"], ...output.suppliers.map(group => [group.source, group.supplier_id, group.shop_name, group.supplier_url, group.products.length])]],
-      ["Задания", [["ID задания", "Запрос / метка", "Площадка", "Адрес выдачи", "Статус", "Начало (UTC)", "Обновлено (UTC)", "Завершено (UTC)", "Собрано страниц", "Лимит страниц", "Товаров в задании", "Этап / сообщение"], ...tasks.map(task => [task.id, task.query, task.source, task.source_url, task.status, task.started_at, task.updated_at, task.finished_at, task.completed_pages, task.max_pages, task.products.length, task.message])]],
+      ["Товары", [columns.map(([, title]) => title), ...output.products.map(product => columns.map(([key]) => value(product, key)))]],
+      ["Поставщики", [["Сайт-источник", "ID поставщика", "Магазин", "Ссылка", "Найдено товаров"], ...output.suppliers.map(group => [sourceSite(group), group.supplier_id, group.shop_name, group.supplier_url, group.products.length])]],
+      ["Задания", [["ID задания", "Запрос / метка", "Сайт-источник", "Адрес выдачи", "Статус", "Начало (UTC)", "Обновлено (UTC)", "Завершено (UTC)", "Собрано страниц", "Лимит страниц", "Товаров в задании", "Этап / сообщение"], ...tasks.map(task => [task.id, task.query, sourceSite(task), task.source_url, task.status, task.started_at, task.updated_at, task.finished_at, task.completed_pages, task.max_pages, task.products.length, task.message])]],
       ["Товары заданий", [["ID задания", "Запрос задания", ...columns.map(([, title]) => title)], ...taskProducts]]
     ];
     const files = [

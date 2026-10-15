@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 let initialized = false;
 let activeTab = null;
+let refreshVersion = 0;
 
 async function send(type, options) {
   const response = await chrome.runtime.sendMessage({ target: "1688-background", type, options });
@@ -15,7 +16,9 @@ function showError(error) {
 }
 
 async function refresh() {
+  const version = ++refreshVersion;
   const state = await send("STATE");
+  if (version !== refreshVersion) return;
   if (!initialized) {
     if (state.preferences) {
       $("query").value = state.preferences.query || "";
@@ -28,9 +31,11 @@ async function refresh() {
     initialized = true;
   }
   const running = state.run?.status === "running";
-  $("count").textContent = state.count;
-  $("page-count").textContent = state.page_count;
-  $("supplier-count").textContent = state.supplier_count;
+  const current = state.current_task;
+  $("count").textContent = current?.product_count ?? state.count;
+  $("page-count").textContent = current?.page_count ?? state.page_count;
+  $("supplier-count").textContent = current?.supplier_count ?? state.supplier_count;
+  $("count-label").textContent = current ? "сохранено в задании" : "товаров в памяти";
   $("collect").disabled = running;
   $("stop").disabled = !running;
   $("resume").disabled = !["paused", "stopped"].includes(state.run?.status);
@@ -38,7 +43,7 @@ async function refresh() {
   $("clear").disabled = running || !state.can_clear;
   $("export").disabled = !state.count && !state.task_count;
   $("export-xlsx").disabled = !state.count && !state.task_count;
-  $("task-count").textContent = `Заданий в памяти: ${state.task_count}`;
+  $("task-count").textContent = `Заданий в памяти: ${state.task_count} · Всего товаров в памяти: ${state.count}`;
   const run = state.run;
   $("progress").value = !run ? 0 : run.status === "finished" ? 100 : run.phase === "details" ? 100 * run.detail_index / Math.max(1, run.detail_total) : 100 * run.completed_pages / Math.max(1, run.max_pages);
   $("progress-label").textContent = run ? `${run.query || "Текущее задание"} · Страницы: ${run.completed_pages}/${run.max_pages}${run.phase === "details" ? ` · Карточки: ${run.detail_index}/${run.detail_total}` : ""} · Товаров сохранено: ${state.tasks.find(task => task.id === run.id)?.product_count || 0}` : "";
@@ -49,7 +54,7 @@ async function refresh() {
     const item = document.createElement("li"); item.textContent = warning; return item;
   }));
   $("warnings").hidden = !state.warnings.length;
-  $("preview").replaceChildren(...state.preview.map(product => {
+  $("preview").replaceChildren(...(current?.preview || state.preview).map(product => {
     const item = document.createElement("li");
     const hasLink = SupplierCollector.webUrl(product.product_url);
     const link = document.createElement(hasLink ? "a" : "span");

@@ -171,7 +171,7 @@ test("the popup renders collection state, escapes titles and triggers JSON expor
   const h = await createHarness(browser, t);
   await h.command("START", { max_pages: 1, scroll: false });
   await h.waitFor(data => data.run?.status === "finished");
-  h.data.collection.products[0].title = '<img src=x onerror="alert(1)">';
+  h.data.tasks[0].products[0].title = h.data.collection.products[0].title = '<img src=x onerror="alert(1)">';
   const popup = await h.context.newPage({ viewport: { width: 400, height: 760 } });
   await popup.exposeFunction("__backgroundCommand", ({ type, options }) => h.command(type, options));
   await popup.addInitScript(() => {
@@ -192,7 +192,7 @@ test("the popup renders collection state, escapes titles and triggers JSON expor
   await popup.locator("#export").click();
   await h.waitFor(() => h.downloads.length === 1);
   // Capture the real popup layout using fixture data, not a live 1688 collection.
-  h.data.collection.products[0].title = "透明水杯 500ml";
+  h.data.tasks[0].products[0].title = h.data.collection.products[0].title = "透明水杯 500ml";
   await popup.reload();
   await popup.waitForFunction(() => document.getElementById("count").textContent === "2");
   fs.mkdirSync(path.join(__dirname, "../test-results"), { recursive: true });
