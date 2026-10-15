@@ -196,7 +196,7 @@ async function saveSearch(id, result, partial = false) {
     if (!partial) {
       const known = run.seen_fingerprints.flatMap(value => value.split(",").filter(Boolean));
       const declared = result.page.diagnostics?.expected_page_size;
-      const coverage = S.collectionQuality(result.products, { known_keys: known, expected_count: declared || run.previous_unique_count || run.previous_fingerprint?.split(",").filter(Boolean).length, count_basis: declared ? "card-appearances" : "unique-offers", check_count: run.scroll, terminal: result.page.diagnostics?.collection_quality?.terminal, page_context: result.page.diagnostics?.page_context, append_mode: run.collection_mode === "append", allow_repeats: run.allow_repeats === true });
+      const coverage = S.collectionQuality(result.products, { source: S.site(result.page.page_url), known_keys: known, expected_count: declared || run.previous_unique_count || run.previous_fingerprint?.split(",").filter(Boolean).length, count_basis: declared ? "card-appearances" : "unique-offers", check_count: run.scroll, terminal: result.page.diagnostics?.collection_quality?.terminal, page_context: result.page.diagnostics?.page_context, append_mode: run.collection_mode === "append", allow_repeats: run.allow_repeats === true });
       if (!coverage.complete) {
         const error = new Error(`Страница не засчитана: найдено ${coverage.observed_count}, новых ${coverage.new_count}, повторных ${coverage.repeated_count}. Дождитесь загрузки выдачи и нажмите «Продолжить».`);
         error.code = "INCOMPLETE_RESULTS";

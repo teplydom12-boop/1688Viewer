@@ -28,12 +28,26 @@ test("coverage distinguishes a stale mixed page, a short loading page, ordinary 
 });
 
 test("historical completeness compares unique offers while declared page size can count repeated cards", () => {
-  const repeated = Array.from({ length: 193 }, (_, i) => ({ source: "alibaba", product_id: String(i % 60) }));
+  const repeated = Array.from({ length: 193 }, (_, i) => ({ source: "1688", product_id: String(i % 60) }));
   const quality = S.collectionQuality(repeated, { expected_count: 60, count_basis: "unique-offers", check_count: true });
   assert.equal(quality.complete, true); assert.equal(quality.unique_id_count, 60); assert.equal(quality.observed_count, 193);
   assert.equal(S.collectionQuality(repeated, { expected_count: 251, check_count: true }).reason, "short-results");
   assert.equal(S.collectionQuality(repeated.slice(0, 1), { expected_count: 60, count_basis: "unique-offers", check_count: true }).reason, "short-results");
   assert.equal(S.collectionQuality(Array(60).fill(repeated[0]), { expected_count: 60, count_basis: "card-appearances", check_count: true }).complete, true);
+});
+
+test("Alibaba completeness is explicitly skipped for counts, overlap and unreliable page metadata only on that source", () => {
+  const rows = Array.from({ length: 60 }, (_, i) => ({ source: "alibaba", product_id: String(100000 + i) }));
+  for (const products of [rows.slice(0, 1), rows]) {
+    const q = S.collectionQuality(products, { expected_count: 190, check_count: true, known_keys: rows.map(row => `${row.source}:${row.product_id}`), page_context: { mismatch: true, mixed: true, url_page: 2, rendered_page: 42 } });
+    assert.equal(q.complete, true); assert.equal(q.checked, false); assert.equal(q.skip_reason, "disabled-for-alibaba"); assert.equal(q.expected_count, null); assert.equal(q.reason, null);
+    assert.equal(q.observed_count, products.length);
+  }
+  for (const source of ["1688", "made-in-china", "web:alibaba.com.example.test"]) {
+    const q = S.collectionQuality(rows.slice(0, 1), { source, expected_count: 190, check_count: true });
+    assert.equal(q.complete, false); assert.equal(q.checked, true); assert.equal(q.reason, "short-results");
+  }
+  assert.equal(S.collectionQuality([], { source: "alibaba" }).checked, false);
 });
 
 const markets = [
@@ -52,7 +66,8 @@ for (const [site, base, makeUrl] of markets) {
     await h.page.goto(base + "?page=1"); assert.equal((await h.command("START", { max_pages: 2, scroll: true, raw: false, interval_seconds: 1 })).ok, true);
     await h.waitFor(d => d.run?.status === "finished", 45000); await h.waitFor(() => h.idle());
     assert.equal(h.data.run.completed_pages, 2); assert.equal(h.data.collection.products.length, 444); assert.equal(h.data.run.previous_unique_count, 60);
-    const q = h.data.collection.pages[1].diagnostics.collection_quality; assert.equal(q.unique_id_count, 60); assert.equal(q.expected_count, 60); assert.equal(q.count_basis, "unique-offers");
+    const q = h.data.collection.pages[1].diagnostics.collection_quality; assert.equal(q.unique_id_count, 60);
+    assert.equal(q.expected_count, site === "alibaba" ? null : 60); assert.equal(q.count_basis, site === "alibaba" ? null : "unique-offers"); assert.equal(q.checked, site !== "alibaba");
   });
   test(`${site}: a short final numbered page finishes an oversized page request normally`, async t => {
     const h = await createHarness(browser, t);
@@ -64,6 +79,36 @@ for (const [site, base, makeUrl] of markets) {
     assert.match(h.page.url(), /page=2$/);
   });
 }
+
+for (const overlap of [false, true]) test(`Alibaba never pauses for completeness with declared size 190, misleading page markers and overlap=${overlap}`, async t => {
+  const h = await createHarness(browser, t), makeUrl = markets[1][2];
+  h.flags.routeHtml = url => compact + `<main data-page-size="190">${url.searchParams.get("page") === "2" ? (overlap ? repeatedCards(100000, 60, makeUrl) : "") + repeatedCards(200000, 1, makeUrl) : repeatedCards(100000, 60, makeUrl)}</main><aside class="pagination"><span aria-current="page">42</span></aside><nav class="pagination"><a rel="next" href="?page=${Number(url.searchParams.get("page")) + 1}">Next page</a></nav>`;
+  await h.page.goto(markets[1][1] + "?page=1"); assert.equal((await h.command("START", { max_pages: 2, scroll: true, raw: false, interval_seconds: 1 })).ok, true);
+  await h.waitFor(d => d.run?.status === "finished", 30000); await h.waitFor(() => h.idle());
+  assert.equal(h.data.run.completed_pages, 2); assert.equal(h.data.collection.products.length, overlap ? 121 : 61);
+  assert.ok(h.data.tasks[0].pages.every(page => !page.partial && page.diagnostics.collection_quality.checked === false));
+  assert.ok(h.data.collection.pages.every(page => page.diagnostics.expected_page_size === 190 && page.diagnostics.page_context.mismatch));
+  assert.ok(!h.data.run.log.some(entry => /полнот|не засчитана/i.test(entry.message)));
+});
+
+test("Alibaba captcha still pauses and resumes after manual completion with completeness disabled", async t => {
+  const h = await createHarness(browser, t), makeUrl = markets[1][2];
+  const ready = compact + '<main data-page-size="190">' + repeatedCards(200000, 1, makeUrl) + '</main>';
+  h.flags.routeHtml = url => url.searchParams.get("page") === "2" ? '<div class="nc-container">安全验证</div>' : compact + repeatedCards(100000, 3, makeUrl) + '<nav class="pagination"><a rel="next" href="?page=2">Next page</a></nav>';
+  await h.page.goto(markets[1][1] + "?page=1"); await h.command("START", { max_pages: 2, scroll: false, raw: false, interval_seconds: 1 });
+  await h.waitFor(d => d.run?.status === "paused", 30000); await h.waitFor(() => h.idle()); assert.equal(h.data.run.pause_reason, "challenge"); assert.equal(h.data.run.completed_pages, 1);
+  await h.page.setContent(ready); assert.equal((await h.command("RESUME")).ok, true);
+  await h.waitFor(d => d.run?.status === "finished", 30000); await h.waitFor(() => h.idle());
+  assert.equal(h.data.run.completed_pages, 2); assert.equal(h.data.collection.products.length, 4); assert.equal(h.data.collection.pages[1].diagnostics.collection_quality.checked, false);
+});
+
+test("Alibaba still pauses when clicking next does not change the page", async t => {
+  const h = await createHarness(browser, t);
+  h.flags.routeHtml = () => compact + repeatedCards(100000, 3, markets[1][2]) + '<nav class="pagination"><button aria-label="Next page">Next page</button></nav>';
+  await h.page.goto(markets[1][1] + "?page=1"); await h.command("START", { max_pages: 2, scroll: false, raw: false, interval_seconds: 1 });
+  await h.waitFor(d => d.run?.status === "paused", 35000); await h.waitFor(() => h.idle());
+  assert.equal(h.data.run.pause_reason, "navigation-unchanged"); assert.equal(h.data.run.completed_pages, 1); assert.equal(h.data.collection.products.length, 3);
+});
 
 test("a paused legacy task ignores inflated previous appearance counts when resumed", async t => {
   const h = await createHarness(browser, t), makeUrl = markets[0][2];
