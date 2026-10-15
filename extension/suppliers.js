@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id), S = globalThis.SupplierCollector;
 const selected = new Set(), expanded = new Set();
 const R = globalThis.SupplierRelevance;
-let criteriaDirty = false, relevanceId = null;
+let criteriaDirty = false, batchSizeDirty = false, relevanceId = null;
 const criteriaMismatch = () => Boolean(state?.job?.relevance && S.text($("relevance-criteria").value) !== state.job.relevance.criteria);
 const labels = { ready: "Готово к проверке", running: "В работе", paused: "Пауза", stopped: "Остановлено", finished: "Завершено" };
 let state = null, preferences = {}, initialized = false, refreshing = false, pending = false, acting = false, taskSignature = "", jobId = null, imageSize = 48, draftImageSize = null, sizeRevision = 0, intervalDirty = false;
@@ -32,21 +32,23 @@ function controls() {
   $("first-stage-note").hidden = !state.first_stage_running;
   for (const id of ["claude-json", "claude-instructions"]) $(id).disabled = blocked || !job || !S.text($("relevance-criteria").value);
   $("relevance-criteria").disabled = blocked;
-  $("claude-batch").disabled = blocked;
+  $("claude-batch-size").disabled = blocked;
+  $("claude-batch").disabled = blocked || Number($("claude-batch-size").value) !== (job?.relevance?.batch_size ?? 0);
   $("import-relevance").disabled = blocked || !job?.relevance || criteriaMismatch();
   $("reset-relevance").disabled = blocked || !job?.relevance;
   $("relevance-draft").hidden = !criteriaMismatch();
   for (const input of $("suppliers").querySelectorAll(".relevance-choice")) input.disabled = blocked;
 }
 function renderRelevance() {
-  const meta = state.job?.relevance, categories = state.result?.relevance.categories;
+  const meta = state.job?.relevance;
   if (!criteriaDirty && meta && document.activeElement !== $("relevance-criteria")) $("relevance-criteria").value = meta.criteria;
+  if (!batchSizeDirty) $("claude-batch-size").value = meta?.batch_size ?? 0;
   const old = meta?.request_id === relevanceId ? $("claude-batch").value : "0"; relevanceId = meta?.request_id || null;
   $("claude-batch").replaceChildren(...(meta?.batches || [{ index: 0 }]).map(batch => { const option = el("option", "Часть " + (batch.index + 1) + (batch.total ? " · оценено " + batch.reviewed + "/" + batch.total : "")); option.value = batch.index; return option; }));
   $("claude-batch").value = [...$("claude-batch").options].some(option => option.value === old) ? old : "0";
-  const total = state.result?.unique_offers || 0, unreviewed = categories?.unreviewed.unique_offers || 0;
+  const total = meta?.total_unique || 0, counts = meta?.counts, unreviewed = counts?.unreviewed || 0;
   $("relevance-progress").max = total || 1; $("relevance-progress").value = total - unreviewed;
-  $("relevance-summary").textContent = !meta ? "Без загруженных решений проверяются все карточки." : "Описание задания: «" + meta.criteria + "». Уникальных карточек оценено " + (total - unreviewed) + " из " + total + ". Подходят: " + categories.relevant.unique_offers + "; уточнить: " + categories.uncertain.unique_offers + "; не подходят: " + categories.excluded.unique_offers + "; без решения: " + unreviewed + ".";
+  $("relevance-summary").textContent = !meta ? "Без загруженных решений проверяются все карточки." : "Описание задания: «" + meta.criteria + "». " + (meta.analysis_unit === "exact-title" ? "Уникальных названий" : "Уникальных карточек (старое задание)") + " оценено " + (total - unreviewed) + " из " + total + ". Подходят: " + counts.relevant + "; уточнить: " + counts.uncertain + "; не подходят: " + counts.excluded + "; без решения: " + unreviewed + ".";
 }
 function renderTasks(force = false) {
   const signature = JSON.stringify(state.tasks);
@@ -84,6 +86,7 @@ function productTree(products, images) {
     if (preferences.history_images && S.webUrl(product.image_url)) {
       const key = product.stage2_row_id + ":" + product.image_url;
       let node = images.get(key);
+      images.delete(key);
       if (!node) {
         node = link(product.image_url, ""); node.dataset.imageKey = key;
         const img = el("img", null, "stage-thumbnail"), sources = SupplierImages.candidates(product.image_url); let index = 0;
@@ -141,7 +144,7 @@ async function refresh() {
     if (!initialized) { for (const task of state.job?.source_tasks || []) selected.add(task.id); initialized = true; }
     const job = state.job;
     const changedJob = (job?.id || null) !== jobId;
-    if (changedJob) { jobId = job?.id || null; expanded.clear(); intervalDirty = false; if (job) { selected.clear(); for (const task of job.source_tasks) selected.add(task.id); } }
+    if (changedJob) { jobId = job?.id || null; expanded.clear(); intervalDirty = false; batchSizeDirty = false; if (job) { selected.clear(); for (const task of job.source_tasks) selected.add(task.id); } }
     if (job && !intervalDirty && document.activeElement !== $("interval")) $("interval").value = job.interval_ms / 1000;
     renderRelevance(); renderTasks(changedJob); controls();
     $("badge").textContent = labels[job?.status] || "Задание не выбрано"; $("badge").dataset.state = job?.status || "";
@@ -167,7 +170,8 @@ $("select-all").addEventListener("click", () => { visibleTasks().forEach(task =>
 $("select-none").addEventListener("click", () => { selected.clear(); renderTasks(true); });
 $("refresh").addEventListener("click", () => { void action(() => Promise.resolve()); });
 $("relevance-criteria").addEventListener("input", () => { criteriaDirty = true; controls(); });
-for (const [id, format] of [["claude-json", "json"], ["claude-instructions", "instructions"]]) $(id).addEventListener("click", () => { void action(async () => { await send("RELEVANCE_EXPORT", { format, criteria: $("relevance-criteria").value, batch_index: criteriaMismatch() ? 0 : Number($("claude-batch").value) }); criteriaDirty = false; }); });
+$("claude-batch-size").addEventListener("change", () => { batchSizeDirty = true; controls(); });
+for (const [id, format] of [["claude-json", "json"], ["claude-instructions", "instructions"]]) $(id).addEventListener("click", () => { void action(async () => { await send("RELEVANCE_EXPORT", { format, criteria: $("relevance-criteria").value, batch_size: Number($("claude-batch-size").value), batch_index: criteriaMismatch() ? 0 : Number($("claude-batch").value) }); criteriaDirty = false; batchSizeDirty = false; }); });
 $("import-relevance").addEventListener("click", () => $("relevance-file").click());
 $("relevance-file").addEventListener("change", () => {
   const files = [...$("relevance-file").files]; if (!files.length) return;

@@ -202,6 +202,20 @@ test("history thumbnails toggle with one click, persist across reloads and handl
   assert.deepEqual(h.data, {});
 });
 
+test("every duplicate history row keeps its own preview through refresh, sorting and supplier tree views", async t => {
+  const h = await createHarness(browser, t), id = await collect(h, "Повторные карточки");
+  const base = { ...h.data.tasks[0].products[0], image_url: "https://images.test/ok.png" }; delete base.observation_id;
+  h.data.tasks[0].products = [structuredClone(base), { ...base, price: "¥20" }, { ...base, observation_id: "repeated" }, { ...base, observation_id: "repeated" }];
+  await h.context.route("https://images.test/**", route => route.fulfill({ contentType: "image/png", body: fs.readFileSync(path.join(__dirname, "fixtures/thumbnail.png")) }));
+  const page = await openHistory(h, id); await page.locator("#toggle-images").click();
+  const allRowsHavePictures = () => page.waitForFunction(() => document.querySelectorAll("#task-memory .history-thumbnail").length === 4 && [...document.querySelectorAll("#task-memory .memory-products tbody tr")].every(row => row.querySelectorAll("img").length === 1));
+  await allRowsHavePictures(); await page.locator("#refresh").click(); await allRowsHavePictures();
+  assert.equal(new Set(await page.locator("[data-image-key]").evaluateAll(nodes => nodes.map(n => n.dataset.imageKey))).size, 4);
+  await page.locator("#price-order").selectOption("price-asc"); await allRowsHavePictures();
+  await page.locator("#memory-view").selectOption("suppliers"); await page.locator(".supplier-name").first().click(); await allRowsHavePictures();
+  await page.locator("#refresh").click(); await allRowsHavePictures();
+});
+
 test("selected Excel export opens the export screen for exactly the chosen historical check", async t => {
   const h = await createHarness(browser, t), { first } = await twoChecks(h), history = await openHistory(h, first);
   await history.waitForFunction(() => !document.getElementById("task-memory").hidden);

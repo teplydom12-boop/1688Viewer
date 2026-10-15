@@ -172,9 +172,9 @@ const SupplierStage = (() => {
   async function exportRelevance(options) {
     if (!["json", "instructions"].includes(options.format)) throw new Error("Выберите JSON или инструкцию для Claude.");
     const result = await editRelevance(async job => {
-      const created = R.create(job, options.criteria, crypto.randomUUID(), new Date().toISOString());
-      const next = created.changed ? requeue(job, created.products, created.relevance, "Задание для Claude подготовлено. Пока решения не загружены, проверяются все карточки.") : job;
-      const payload = R.payload(next, options.batch_index ?? 0);
+      const created = R.create(job, options.criteria, crypto.randomUUID(), new Date().toISOString(), options.batch_size);
+      const next = created.changed ? requeue(job, created.products, created.relevance, created.preserved ? "Размер порций изменён. Категории сохранены; для новых ответов используйте новое задание для Claude." : "Задание для Claude подготовлено. Пока решения не загружены, проверяются все карточки.") : job;
+      const payload = R.payload(next, created.changed ? 0 : options.batch_index ?? 0);
       if (created.changed) await chrome.storage.local.set({ [key]: next });
       return { payload, job_id: job.id };
     });
@@ -186,14 +186,14 @@ const SupplierStage = (() => {
   async function importRelevance(options) {
     return editRelevance(async job => {
       const result = R.apply(job, options.files, options.criteria, new Date().toISOString());
-      const message = "Решения загружены: " + result.stats.applied_unique + " уникальных карточек. Ручных решений сохранено: " + result.stats.preserved_manual + ". Неподтверждённых исключений оставлено для уточнения: " + result.stats.downgraded_unique + ".";
+      const message = "Решения загружены: " + result.stats.applied_unique + (job.relevance.analysis_unit === "exact-title" ? " уникальных названий." : " уникальных карточек.") + " Ручных решений сохранено: " + result.stats.preserved_manual + ". Неподтверждённых исключений оставлено для уточнения: " + result.stats.downgraded_unique + ".";
       await chrome.storage.local.set({ [key]: requeue(job, result.products, job.relevance, message) }); return result.stats;
     });
   }
   async function overrideRelevance(options) {
     return editRelevance(async job => {
       const products = R.override(job, options.card_id, options.status, new Date().toISOString());
-      await chrome.storage.local.set({ [key]: requeue(job, products, job.relevance, "Категория изменена вручную для всех появлений карточки.") }); return { saved: true };
+      await chrome.storage.local.set({ [key]: requeue(job, products, job.relevance, job.relevance.analysis_unit === "exact-title" ? "Категория изменена вручную для всех карточек с этим точным названием." : "Категория изменена вручную для всех появлений карточки.") }); return { saved: true };
     });
   }
   async function resetRelevance() {

@@ -140,7 +140,7 @@
       source_tasks: job.source_tasks, sources: [...new Set(rows.map(source))], total_cards: rows.length, unique_offers: uniqueOffers, duplicate_cards: rows.length - uniqueOffers,
       total_suppliers: groups.size, unknown_cards: unresolved.length, unknown_unique_offers: unique(unresolved), card_checks: { planned: job.queue.length, opened: job.opened_keys.length, checked: job.checked_count, processed: job.cursor, skipped: job.skipped_count || 0 },
       suppliers, products: rows, excluded_products: rows.filter(excluded), included_cards: rows.filter(row => !excluded(row)).length,
-      relevance: { request_id: job.relevance?.request_id || null, criteria: job.relevance?.criteria || null, categories: relevanceSummary(rows) }, scope: "only_cards_from_selected_tasks" };
+      relevance: { request_id: job.relevance?.request_id || null, analysis_unit: job.relevance ? job.relevance.analysis_unit || "offer" : null, criteria: job.relevance?.criteria || null, categories: relevanceSummary(rows) }, scope: "only_cards_from_selected_tasks" };
   }
   const api = { unknown, excluded, relevanceSummary, offerKey, evidence, identified, complete, rowsFromTasks, queue, reuse, needsCheck, matchDetail, applyDetail, report };
   root.SupplierSearchCore = api;

@@ -11,7 +11,7 @@ function job(products = [row(1), row(2, "Mini excavator")]) {
   const rows = C.rowsFromTasks([task("a", products)], {});
   return { id: "job-a", products: rows, source_tasks: [], queue: C.queue(rows), cursor: 0, opened_keys: [], checked_count: 0, status: "ready", log: [] };
 }
-function request(j, target = criteria, id = "request-a") { const result = R.create(j, target, id, at); return { ...j, products: result.products, relevance: result.relevance }; }
+function request(j, target = criteria, id = "request-a", size) { const result = R.create(j, target, id, at, size); return { ...j, products: result.products, relevance: result.relevance }; }
 function answer(j, decisions, index = 0) { return JSON.stringify({ ...R.payload(j, index).response_template, decisions }); }
 const decision = (id, status = "relevant", evidence = "", reason = "Тип товара соответствует запросу") => ({ id, status, reason, evidence });
 function seed(h, products) { h.data.tasks = [task("a", products)]; h.data.collection = { products, pages: [], raw_cards: [] }; }
@@ -23,14 +23,61 @@ let browser;
 before(async () => { browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] }); });
 after(async () => { await browser?.close(); });
 
-test("Claude files contain unique multilingual titles and opaque IDs in bounded batches, without vendor, price or private data", () => {
-  const j = request(job([...Array.from({ length: 201 }, (_, i) => row(i + 1, "Tool " + i, { price: "PRIVATE-PRICE", supplier_url: "https://privatefactory.1688.com/", token: "PRIVATE-TOKEN" })), row(1, "220V 电动劈木机")]));
-  const first = R.payload(j, 0), last = R.payload(j, 1);
-  assert.equal(first.cards.length, 200); assert.equal(last.cards.length, 1); assert.equal(first.total_parts, 2);
-  assert.equal(first.cards[0].occurrences, 2); assert.deepEqual(first.cards[0].titles, ["Tool 0", "220V 电动劈木机"]);
-  assert.doesNotMatch(JSON.stringify(first), /PRIVATE|privatefactory|detail\.1688/);
-  assert.deepEqual(Object.keys(first.cards[0]), ["id", "source", "titles", "occurrences"]); assert.match(first.instruction, /недоверенные данные/);
-  assert.notEqual(first.batch_id, last.batch_id); assert.equal(first.request_id, last.request_id); assert.throws(() => R.payload(j, 2));
+test("all exact multilingual titles are exported once by default, containing only opaque IDs and titles", () => {
+  const j = request(job([...Array.from({ length: 501 }, (_, i) => row(i + 1, "Tool " + i, { price: "PRIVATE-PRICE", image_url: "https://images.test/PRIVATE-PHOTO.png", supplier_url: "https://privatefactory.1688.com/", token: "PRIVATE-TOKEN" })), row(1, "220V 电动劈木机"), row(900, "Tool 0")]));
+  const first = R.payload(j);
+  assert.equal(first.cards.length, 502); assert.equal(first.total_parts, 1); assert.equal(R.metadata(j).total_unique, 502);
+  assert.equal(first.cards[501].title, "220V 电动劈木机");
+  assert.doesNotMatch(JSON.stringify(first), /PRIVATE|privatefactory|detail\.1688|images\.test/);
+  assert.deepEqual(Object.keys(first.cards[0]), ["id", "title"]); assert.match(first.instruction, /недоверенные данные/); assert.match(first.instruction, /Не используй изображения/);
+  assert.throws(() => R.payload(j, 1));
+});
+
+test("exact title decisions reach different offers and sites without merging their vendor identities or rows", () => {
+  const products = [row(1, "小型挖掘机", { supplier_id: "a", supplier_url: "https://a.1688.com/" }), row(2, "小型挖掘机", { source: "alibaba", product_url: "https://www.alibaba.com/product-detail/A_100002.html", supplier_id: "b", supplier_url: "https://b.en.alibaba.com/" }), row(3, "小型挖掘机", { supplier_id: "c", supplier_url: "https://c.1688.com/" })];
+  const j = request(job(products)); assert.equal(R.payload(j).cards.length, 1);
+  j.products = R.apply(j, [answer(j, [decision("card_000001")])], criteria, at).products;
+  const report = C.report(j); assert.equal(report.products.length, 3); assert.equal(report.unique_offers, 3); assert.equal(report.suppliers.length, 3); assert.equal(report.relevance.analysis_unit, "exact-title");
+  assert.equal(R.metadata(j).counts.relevant, 1); assert.equal(R.metadata(j).batches[0].reviewed, 1);
+  assert.ok(j.products.every(p => p.relevance.status === "relevant"));
+  j.products = R.override(j, "card_000001", "excluded", at); assert.equal(C.queue(j.products).length, 0); assert.equal(C.report(j).excluded_products.length, 3);
+});
+
+test("titles with different case, spacing, symbols or languages are never approximately deduplicated", () => {
+  const names = ["Log splitter", "log splitter", "Log  splitter", "Log splitter ", "Ｌog splitter", "劈木机", "Log splitter"];
+  const j = request(job(names.map((name, index) => row(index + 1, name))));
+  assert.deepEqual(R.payload(j).cards.map(card => card.title), names.slice(0, -1));
+});
+
+test("different titles on the same offer stay independently reviewable and an eligible appearance still schedules its offer", () => {
+  const j = request(job([row(1, "Mini excavator"), row(1, "Electric log splitter")]));
+  j.products = R.apply(j, [answer(j, [decision("card_000001", "excluded", "Mini excavator")])], criteria, at).products;
+  assert.equal(R.metadata(j).total_unique, 2); assert.equal(C.report(j).unique_offers, 1);
+  assert.equal(C.queue(j.products).length, 1); assert.equal(C.queue(j.products)[0].row_id, j.products[1].stage2_row_id);
+  assert.equal(C.report(j).excluded_products.length, 1);
+});
+
+test("optional title batches reject cross-part IDs and resizing preserves classifications with a new request binding", () => {
+  let j = request(job(Array.from({ length: 501 }, (_, i) => row(i + 1, "Tool " + i))), criteria, "a", 200);
+  assert.deepEqual(R.metadata(j).batches.map(b => b.total), [200, 200, 101]);
+  assert.throws(() => R.apply(j, [answer(j, [decision("card_000201")])], criteria, at), /неизвестная карточка/);
+  const old = answer(j, [decision("card_000001")]); j.products = R.apply(j, [old], criteria, at).products;
+  j.products = R.override(j, "card_000002", "uncertain", at);
+  j = request(j, criteria, "b", 0); assert.equal(R.payload(j).cards.length, 501);
+  assert.deepEqual(j.products.slice(0, 2).map(p => p.relevance.status), ["relevant", "uncertain"]);
+  assert.equal(R.metadata(j).batches[0].reviewed, 2); assert.throws(() => R.apply(j, [old], criteria, at), /другому заданию/);
+  for (const size of [100, 500]) { j = request(j, criteria, "size-" + size, size); assert.equal(R.payload(j).cards.length, size); assert.equal(R.metadata(j).counts.relevant, 1); }
+  assert.throws(() => R.create(j, criteria, "bad", at, -1));
+});
+
+test("saved 0.14 offer-based requests and previously downloaded answers remain importable until a new export", () => {
+  const j = job([row(1, "Electric log splitter"), row(1, "电动劈木机"), row(2, "Mini excavator")]);
+  j.relevance = { request_id: "old", criteria, batch_size: 200, cards: [{ id: "card_000001", key: "1688:1", titles: ["Electric log splitter", "电动劈木机"] }, { id: "card_000002", key: "1688:2", titles: ["Mini excavator"] }] };
+  j.products.forEach(p => { p.relevance = { request_id: "old", card_id: p.product_id === "1" ? "card_000001" : "card_000002", status: "unreviewed" }; });
+  j.products = R.apply(j, [answer(j, [decision("card_000002", "excluded", "Mini excavator")])], criteria, at).products;
+  assert.equal(R.metadata(j).analysis_unit, "offer"); assert.equal(R.metadata(j).counts.excluded, 1); assert.equal(C.queue(j.products).length, 1);
+  const next = request(j, criteria, "new"); assert.equal(R.metadata(next).analysis_unit, "exact-title"); assert.equal(R.payload(next).cards.length, 3);
+  assert.throws(() => R.apply(next, [answer(j, [decision("card_000001")])], criteria, at), /другому заданию/);
 });
 
 test("request identity is reused for unchanged exports but changes in criteria or titles invalidate previous decisions", () => {
@@ -43,7 +90,7 @@ test("request identity is reused for unchanged exports but changes in criteria o
 });
 
 test("partial decisions across batches accumulate and unreviewed or uncertain offers stay eligible", () => {
-  const j = request(job(Array.from({ length: 201 }, (_, i) => row(i + 1, i ? "Electric log splitter" : "Mini excavator"))));
+  const j = request(job(Array.from({ length: 201 }, (_, i) => row(i + 1, i ? "Electric log splitter " + i : "Mini excavator"))), criteria, "request-a", 200);
   const a = answer(j, [decision("card_000001", "excluded", "Mini excavator", "Это экскаватор")]), b = answer(j, [decision("card_000201", "uncertain", "", "Питание не указано")], 1);
   const result = R.apply(j, [a, b], criteria, at); assert.equal(result.stats.applied_unique, 2);
   const next = { ...j, products: result.products }; assert.equal(C.queue(next.products).length, 200);
@@ -78,7 +125,7 @@ test("an unsupported exclusion becomes uncertain, including missing titles and i
 });
 
 test("manual categories apply to every appearance, survive imports and can reset without deleting rows or the file binding", () => {
-  let j = request(job([row(1), row(1, "电动劈木机"), row(2, "Mini excavator")]));
+  let j = request(job([row(1), row(1), row(2, "Mini excavator")]));
   const text = answer(j, [decision("card_000001", "uncertain"), decision("card_000002", "excluded", "Mini excavator")]);
   j.products = R.override(j, "card_000001", "excluded", at);
   const result = R.apply(j, [text, text], criteria, at);
@@ -114,8 +161,8 @@ test("imports reject a different job and atomically reject a mixed valid/invalid
 });
 
 test("the worker visits only relevant, uncertain and unreviewed unique offers while retaining every excluded appearance", async t => {
-  const h = await createHarness(browser, t), products = [row(1001), row(1002, "Mini excavator"), row(1002, "Mini excavator"), row(1003), row(1004)];
-  await prepared(h, products); const original = structuredClone(h.data.tasks), payload = await exported(h), ids = new Map(payload.cards.map(card => [card.titles[0], card.id]));
+  const h = await createHarness(browser, t), products = [row(1001), row(1002, "Mini excavator"), row(1002, "Mini excavator"), row(1003, "220V splitter"), row(1004)];
+  await prepared(h, products); const original = structuredClone(h.data.tasks), payload = await exported(h), ids = new Map(payload.cards.map(card => [card.title, card.id]));
   const files = [response(payload, [decision(payload.cards[0].id), decision(ids.get("Mini excavator"), "excluded", "Mini excavator"), decision(payload.cards[2].id, "uncertain")])];
   assert.equal((await h.command("RELEVANCE_IMPORT", { criteria, files })).ok, true);
   const visits = []; h.flags.routeHtml = url => { if (url.hostname === "detail.1688.com") { visits.push(url.pathname); return h.detailHtml; } };
@@ -177,6 +224,35 @@ test("file UI downloads instructions/JSON, imports partial answers, shows exclud
   await page.locator("#relevance-criteria").fill(criteria); await load("{bad"); await page.locator("#error").waitFor({ state: "visible" }); assert.match(await page.locator("#error").textContent(), /целым JSON/);
   await page.locator("#category-filter").selectOption(""); await page.locator("#expand-all").click(); fs.mkdirSync(path.join(__dirname, "../test-results"), { recursive: true }); await page.screenshot({ path: path.join(__dirname, "../test-results/relevance.png"), fullPage: true });
   await page.reload(); await page.waitForFunction(() => document.getElementById("relevance-progress").value === 1); assert.equal(await page.locator("#relevance-criteria").inputValue(), criteria); assert.deepEqual(h.data.tasks, original);
+});
+
+test("file UI defaults to all titles and changing batch size keeps accepted decisions with correct title progress", async t => {
+  const h = await createHarness(browser, t); await prepared(h, [...Array.from({ length: 201 }, (_, i) => row(1001 + i, "Tool " + i)), row(3000, "Tool 0")]);
+  const page = await ui(h); await page.locator("#relevance-criteria").fill(criteria);
+  assert.equal(await page.locator("#claude-batch-size").inputValue(), "0");
+  await page.locator("#claude-json").click(); await h.waitFor(() => h.downloads.length === 1); const all = downloaded(h); assert.equal(all.cards.length, 201);
+  await h.command("RELEVANCE_IMPORT", { criteria, files: [response(all, [decision(all.cards[0].id)])] });
+  await page.waitForFunction(() => document.getElementById("relevance-progress").value === 1 && document.getElementById("relevance-progress").max === 201);
+  await page.locator("#claude-batch-size").selectOption("200"); await page.locator("#claude-json").click(); await h.waitFor(() => h.downloads.length === 2);
+  const first = downloaded(h); assert.equal(first.cards.length, 200); assert.notEqual(first.request_id, all.request_id);
+  assert.ok([h.data.supplier_search.products[0], h.data.supplier_search.products[201]].every(p => p.relevance.status === "relevant"));
+  await page.waitForFunction(() => document.getElementById("claude-batch").options.length === 2 && !document.getElementById("claude-batch").disabled);
+  await page.locator("#claude-batch").selectOption("1"); await page.locator("#claude-json").click(); await h.waitFor(() => h.downloads.length === 3);
+  const last = downloaded(h); assert.equal(last.cards.length, 1); assert.equal(last.request_id, first.request_id);
+  await page.reload(); await page.waitForFunction(() => document.getElementById("claude-batch-size").value === "200" && document.getElementById("relevance-progress").value === 1);
+});
+
+test("repeated stage two cards keep separate previews and categories after an identical-title decision", async t => {
+  const h = await createHarness(browser, t), products = [row(1001), row(1001), row(1002)].map(p => ({ ...p, image_url: "https://images.test/ok.png" }));
+  await prepared(h, products); const payload = await exported(h); assert.equal(payload.cards.length, 1);
+  await h.command("RELEVANCE_IMPORT", { criteria, files: [response(payload, [decision(payload.cards[0].id)])] });
+  await h.context.route("https://images.test/**", route => route.fulfill({ contentType: "image/png", body: fs.readFileSync(path.join(__dirname, "fixtures/thumbnail.png")) }));
+  const page = await ui(h); await page.locator("#expand-all").click(); await page.locator("#toggle-images").click();
+  const pictured = () => page.waitForFunction(() => document.querySelectorAll(".product-tree tbody tr").length === 3 && [...document.querySelectorAll(".product-tree tbody tr")].every(row => row.querySelectorAll("img").length === 1));
+  await pictured(); await page.locator("#refresh").click(); await pictured();
+  assert.deepEqual(await page.locator(".relevance-choice").evaluateAll(nodes => nodes.map(n => n.value)), ["relevant", "relevant", "relevant"]);
+  await page.locator(".relevance-choice").first().selectOption("excluded"); await h.waitFor(d => d.supplier_search.products.every(p => p.relevance.status === "excluded"));
+  await page.locator("#category-filter").selectOption("excluded"); await pictured(); await page.locator("#refresh").click(); await pictured();
 });
 
 test("JSON, CSV and Excel retain all selected rows, categories/reasons, excluded sheets and literal model text", async t => {

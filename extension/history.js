@@ -74,13 +74,16 @@ function renderMemory() {
   $("memory-empty").hidden = Boolean(products.length);
   $("memory-cards-wrap").hidden = view !== "cards"; $("memory-suppliers-wrap").hidden = view !== "suppliers";
   const thumbnails = new Map([...$("task-memory").querySelectorAll("[data-image-key]")].map(node => [node.dataset.imageKey, node]));
+  const positions = new Map(selected.products.map((product, index) => [product, index])), appearances = new Map();
   const productRow = product => {
     const row = element("tr"), name = element("td"); name.append(link(product.product_url, product.title || "Название не получено"), element("small", `ID: ${product.product_id}${product.page_index ? ` · Страница ${product.page_index}` : ""}${product.card_index ? ` · Позиция ${product.card_index}` : ""}`, "supplier-id"));
     const supplier = element("td"); supplier.append(link(product.supplier_url, product.shop_name || "Имя магазина не получено"), element("small", product.supplier_id || "", "supplier-id"));
     const image = element("td");
     if (showImages && SupplierCollector.webUrl(product.image_url)) {
-      const key = `${product.observation_id || product.product_id}:${product.image_url}`;
+      const appearance = appearances.get(product) || 0; appearances.set(product, appearance + 1);
+      const key = `${selected.id}:${positions.get(product)}:${appearance}:${product.image_url}`;
       let thumbnail = thumbnails.get(key);
+      thumbnails.delete(key);
       if (!thumbnail) {
         thumbnail = link(product.image_url, ""); thumbnail.dataset.imageKey = key;
         const img = element("img", null, "history-thumbnail"); img.width = imageSize; img.height = imageSize; img.alt = product.title || "Изображение товара";

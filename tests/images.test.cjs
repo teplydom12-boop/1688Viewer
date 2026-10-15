@@ -63,6 +63,14 @@ test("Excel export embeds deduplicated thumbnails with grouped cell anchors, saf
   await page.screenshot({ path: path.resolve(__dirname, "../test-results/excel-export.png"), fullPage: true });
 });
 
+test("identical repeated cards receive an Excel picture in every row while sharing one downloaded image", async t => {
+  const card = product("1001", "https://images.test/ok.png"), products = Array.from({ length: 4 }, () => ({ ...card }));
+  const { page, downloads, requests } = await openExport(t, { output: snapshot(products) });
+  await page.locator("#download").click(); await page.waitForFunction(() => document.getElementById("status").textContent.includes("Файл передан"));
+  assert.equal(requests.length, 1);
+  inspectWorkbook(downloads[0].bytes, `assert len([n for n in z.namelist() if n.startswith('xl/media/')])==1\nfor sheet,count in [(1,4),(4,5)]:\n d=ET.fromstring(z.read(f'xl/drawings/drawing{sheet}.xml'))\n rows=[int(a.find('d:from/d:row',ns).text) for a in d.findall('d:twoCellAnchor',ns)]\n assert rows==list(range(1,count+1)), rows\n assert len({a.find('d:pic/d:nvPicPr/d:cNvPr',ns).attrib['id'] for a in d.findall('d:twoCellAnchor',ns)})==count`);
+});
+
 test("permission denial explains how to export without photos; unchecked export makes no image requests", async t => {
   const { page, downloads, permissions, requests } = await openExport(t, { permission: false });
   await page.locator("#download").click(); await page.waitForFunction(() => !document.getElementById("error").hidden);
