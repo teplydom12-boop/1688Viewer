@@ -2,6 +2,13 @@
   "use strict";
   const S = root.SupplierCollector || (typeof require === "function" ? require("./shared.js") : null);
   const unknown = "Поставщик неизвестен";
+  const excluded = row => row.relevance?.status === "excluded";
+  function relevanceSummary(rows) {
+    const categories = Object.fromEntries(["unreviewed", "relevant", "uncertain", "excluded"].map(status => [status, { cards: 0, unique_offers: 0 }])), seen = new Map();
+    for (const row of rows) { const status = Object.hasOwn(categories, row.relevance?.status) ? row.relevance.status : "unreviewed"; categories[status].cards++; if (!seen.has(status)) seen.set(status, new Set()); seen.get(status).add(offerKey(row)); }
+    for (const [status, keys] of seen) categories[status].unique_offers = keys.size;
+    return categories;
+  }
   function source(item) { return item.source || S.site(item.product_url || item.source_page_url); }
   function offerKey(item) {
     const site = source(item), url = S.webUrl(item.product_url) ? S.canonicalUrl(item.product_url) : null;
@@ -70,12 +77,13 @@
   function rowsFromTasks(tasks, cache) {
     return reuse(tasks.flatMap(task => (task.products || []).map((item, index) => ({ ...item,
       stage2_row_id: task.id + ":" + index, source_task_id: task.id, source_task_name: task.query || task.id,
-      supplier: evidence(item)
+      supplier: evidence(item), relevance: undefined
     }))), cache);
   }
   function queue(rows) {
     const groups = new Map(), byUrl = aliases(rows);
     for (const row of rows) {
+      if (excluded(row)) continue;
       if (!row.supplier_conflict && complete(row.supplier)) continue;
       if (!S.webUrl(row.product_url) || S.dangerousUrl(row.product_url)) continue;
       const offer = offerKey(row), owner = !row.supplier_conflict && identity(row.supplier, byUrl);
@@ -86,7 +94,7 @@
   }
   function needsCheck(rows, entry) {
     const row = rows.find(item => item.stage2_row_id === entry.row_id);
-    return Boolean(row && (row.supplier_conflict || !complete(row.supplier)));
+    return Boolean(row && !excluded(row) && (row.supplier_conflict || !complete(row.supplier)));
   }
   function matchDetail(entry, rows, products) {
     const target = rows.find(row => row.stage2_row_id === entry.row_id);
@@ -101,6 +109,7 @@
     const byUrl = aliases(rows), owner = !target.supplier_conflict && identity(target.supplier, byUrl);
     for (const row of rows) {
       const exact = offerKey(row) === entry.offer_key;
+      if (excluded(row)) continue;
       const related = owner && !row.supplier_conflict && identity(row.supplier, byUrl) === owner;
       if (!exact && !related) continue;
       if (exact) { row.supplier_check = found && identified(found) ? "identified" : "unknown"; row.supplier_checked_at = checkedAt; }
@@ -116,6 +125,7 @@
   function report(job) {
     const rows = job.products, byUrl = aliases(rows), groups = new Map(), unresolved = [];
     for (const row of rows) {
+      if (excluded(row)) continue;
       const key = !row.supplier_conflict && identity(row.supplier, byUrl);
       if (!key) { unresolved.push(row); continue; }
       if (!groups.has(key)) groups.set(key, { key, source: row.supplier.source, supplier_id: row.supplier.supplier_id, shop_name: row.supplier.shop_name || (row.supplier.supplier_url ? new URL(row.supplier.supplier_url).hostname : "Поставщик " + row.supplier.supplier_id), supplier_url: row.supplier.supplier_url, status: "identified", products: [] });
@@ -129,9 +139,10 @@
     return { schema_version: 1, report_type: "supplier_search", job_id: job.id, status: job.status, started_at: job.started_at, finished_at: job.finished_at || null,
       source_tasks: job.source_tasks, sources: [...new Set(rows.map(source))], total_cards: rows.length, unique_offers: uniqueOffers, duplicate_cards: rows.length - uniqueOffers,
       total_suppliers: groups.size, unknown_cards: unresolved.length, unknown_unique_offers: unique(unresolved), card_checks: { planned: job.queue.length, opened: job.opened_keys.length, checked: job.checked_count, processed: job.cursor, skipped: job.skipped_count || 0 },
-      suppliers, products: rows, scope: "only_cards_from_selected_tasks" };
+      suppliers, products: rows, excluded_products: rows.filter(excluded), included_cards: rows.filter(row => !excluded(row)).length,
+      relevance: { request_id: job.relevance?.request_id || null, criteria: job.relevance?.criteria || null, categories: relevanceSummary(rows) }, scope: "only_cards_from_selected_tasks" };
   }
-  const api = { unknown, offerKey, evidence, identified, complete, rowsFromTasks, queue, reuse, needsCheck, matchDetail, applyDetail, report };
+  const api = { unknown, excluded, relevanceSummary, offerKey, evidence, identified, complete, rowsFromTasks, queue, reuse, needsCheck, matchDetail, applyDetail, report };
   root.SupplierSearchCore = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

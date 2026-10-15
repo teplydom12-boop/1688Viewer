@@ -1,6 +1,9 @@
 "use strict";
 const $ = id => document.getElementById(id), S = globalThis.SupplierCollector;
 const selected = new Set(), expanded = new Set();
+const R = globalThis.SupplierRelevance;
+let criteriaDirty = false, relevanceId = null;
+const criteriaMismatch = () => Boolean(state?.job?.relevance && S.text($("relevance-criteria").value) !== state.job.relevance.criteria);
 const labels = { ready: "Готово к проверке", running: "В работе", paused: "Пауза", stopped: "Остановлено", finished: "Завершено" };
 let state = null, preferences = {}, initialized = false, refreshing = false, pending = false, acting = false, taskSignature = "", jobId = null, imageSize = 48, draftImageSize = null, sizeRevision = 0, intervalDirty = false;
 const el = (tag, text, className) => { const node = document.createElement(tag); if (text != null) node.textContent = text; if (className) node.className = className; return node; };
@@ -19,14 +22,31 @@ function controls() {
   for (const input of $("tasks").querySelectorAll("input")) input.disabled = blocked;
   $("select-all").disabled = blocked; $("select-none").disabled = blocked;
   $("selection-count").textContent = "Выбрано заданий: " + selected.size;
-  $("start").disabled = acting || state.busy || state.first_stage_running || !["ready", "paused"].includes(job?.status);
-  $("start").textContent = job?.status === "paused" ? "Продолжить" : "Открыть карточки";
+  $("start").disabled = blocked || criteriaMismatch() || !["ready", "paused"].includes(job?.status);
+  $("start").textContent = job?.status === "paused" ? "Продолжить" : "Проверить поставщиков";
   $("pause").disabled = acting || job?.status !== "running";
   $("skip").disabled = acting || !job || job.status === "finished";
   $("show-tab").disabled = acting || job?.tab_id == null;
   $("save-interval").disabled = acting || !job || job.status === "finished";
   for (const id of ["export-json", "export-xlsx", "export-csv", "result-export-xlsx"]) $(id).disabled = acting || !state.result;
   $("first-stage-note").hidden = !state.first_stage_running;
+  for (const id of ["claude-json", "claude-instructions"]) $(id).disabled = blocked || !job || !S.text($("relevance-criteria").value);
+  $("relevance-criteria").disabled = blocked;
+  $("claude-batch").disabled = blocked;
+  $("import-relevance").disabled = blocked || !job?.relevance || criteriaMismatch();
+  $("reset-relevance").disabled = blocked || !job?.relevance;
+  $("relevance-draft").hidden = !criteriaMismatch();
+  for (const input of $("suppliers").querySelectorAll(".relevance-choice")) input.disabled = blocked;
+}
+function renderRelevance() {
+  const meta = state.job?.relevance, categories = state.result?.relevance.categories;
+  if (!criteriaDirty && meta && document.activeElement !== $("relevance-criteria")) $("relevance-criteria").value = meta.criteria;
+  const old = meta?.request_id === relevanceId ? $("claude-batch").value : "0"; relevanceId = meta?.request_id || null;
+  $("claude-batch").replaceChildren(...(meta?.batches || [{ index: 0 }]).map(batch => { const option = el("option", "Часть " + (batch.index + 1) + (batch.total ? " · оценено " + batch.reviewed + "/" + batch.total : "")); option.value = batch.index; return option; }));
+  $("claude-batch").value = [...$("claude-batch").options].some(option => option.value === old) ? old : "0";
+  const total = state.result?.unique_offers || 0, unreviewed = categories?.unreviewed.unique_offers || 0;
+  $("relevance-progress").max = total || 1; $("relevance-progress").value = total - unreviewed;
+  $("relevance-summary").textContent = !meta ? "Без загруженных решений проверяются все карточки." : "Описание задания: «" + meta.criteria + "». Уникальных карточек оценено " + (total - unreviewed) + " из " + total + ". Подходят: " + categories.relevant.unique_offers + "; уточнить: " + categories.uncertain.unique_offers + "; не подходят: " + categories.excluded.unique_offers + "; без решения: " + unreviewed + ".";
 }
 function renderTasks(force = false) {
   const signature = JSON.stringify(state.tasks);
@@ -55,7 +75,7 @@ function tick() {
 function applySize(size) { imageSize = size; $("image-size").value = size; $("image-size-value").textContent = size + " px"; for (const img of $("suppliers").querySelectorAll(".stage-thumbnail")) { img.width = size; img.height = size; } }
 function productTree(products, images) {
   const table = el("table", null, "product-tree"), head = el("thead"), titles = el("tr"), body = el("tbody");
-  for (const title of ["Найденная карточка", "Площадка", "Задание", "Изображение", "Проверка продавца"]) titles.append(el("th", title)); head.append(titles);
+  for (const title of ["Найденная карточка", "Площадка", "Задание", "Изображение", "Проверка продавца", "Релевантность"]) titles.append(el("th", title)); head.append(titles);
   for (const product of products) {
     const row = el("tr"), title = el("td", null, "title-cell"); title.append(link(product.product_url, product.title || product.product_id || "Карточка без названия"));
     title.append(el("small", "ID: " + (product.product_id || "—") + " · " + date(product.collected_at)));
@@ -74,16 +94,26 @@ function productTree(products, images) {
       const img = node.querySelector("img"); if (img) { img.width = imageSize; img.height = imageSize; } photo.append(node);
     } else photo.append(product.image_url ? link(product.image_url, "Фото ↗") : el("span", "—"));
     const status = product.supplier_conflict ? "Противоречивые сведения" : product.supplier_check === "unknown" ? "Поставщик неизвестен после проверки" : product.supplier_check === "identified" ? "Продавец проверен в карточке" : product.supplier.supplier_id || product.supplier.supplier_url ? "Из сохранённых данных / по идентификатору" : "Поставщик неизвестен";
-    row.append(title, el("td", site(product.source)), task, photo, el("td", status)); body.append(row);
+    const category = el("td", null, "relevance-cell"), decision = product.relevance;
+    if (decision?.card_id) {
+      const select = el("select", null, "relevance-choice"); select.dataset.cardId = decision.card_id; select.setAttribute("aria-label", "Категория: " + (product.title || product.product_id));
+      for (const [value, label] of Object.entries(R.labels)) { const option = el("option", label); option.value = value; select.append(option); } select.value = decision.status;
+      select.disabled = acting || state.busy || state.job?.status === "running" || state.first_stage_running;
+      select.addEventListener("change", () => { void action(() => send("RELEVANCE_OVERRIDE", { card_id: decision.card_id, status: select.value })).finally(renderResult); }); category.append(select);
+      if (decision.reason) category.append(el("small", decision.reason)); if (decision.evidence) category.append(el("small", "Цитата: «" + decision.evidence + "»"));
+    } else category.append(el("span", R.labels.unreviewed));
+    row.append(title, el("td", site(product.source)), task, photo, el("td", SupplierSearchCore.excluded(product) ? "Проверка пропущена: не подходит" : status), category); body.append(row);
   }
   table.append(head, body); return table;
 }
 function renderResult() {
-  const result = state.result, term = $("filter").value.trim().toLowerCase(), images = new Map([...$("suppliers").querySelectorAll("[data-image-key]")].map(node => [node.dataset.imageKey, node]));
+  const result = state.result, term = $("filter").value.trim().toLowerCase(), category = $("category-filter").value, images = new Map([...$("suppliers").querySelectorAll("[data-image-key]")].map(node => [node.dataset.imageKey, node]));
+  const matchesCategory = product => !category || (product.relevance?.status || "unreviewed") === category;
+  const matchesProduct = product => [product.title, product.product_id, product.source_task_name, site(product.source)].some(value => String(value || "").toLowerCase().includes(term));
   const rows = [];
   for (const supplier of result?.suppliers || []) {
     const supplierMatches = [supplier.shop_name, supplier.supplier_id, supplier.supplier_url, site(supplier.source)].some(value => String(value || "").toLowerCase().includes(term));
-    const products = supplierMatches ? supplier.products : supplier.products.filter(product => [product.title, product.product_id, product.source_task_name, site(product.source)].some(value => String(value || "").toLowerCase().includes(term)));
+    const products = supplier.products.filter(product => matchesCategory(product) && (supplierMatches || matchesProduct(product)));
     if (!products.length) continue;
     const open = expanded.has(supplier.key), row = el("tr"), title = el("td"), button = el("button", (open ? "▾ " : "▸ ") + supplier.shop_name, "supplier-name");
     button.setAttribute("aria-expanded", String(open)); button.addEventListener("click", () => { if (expanded.has(supplier.key)) expanded.delete(supplier.key); else expanded.add(supplier.key); renderResult(); }); title.append(button);
@@ -92,10 +122,16 @@ function renderResult() {
     row.append(title, el("td", site(supplier.source)), el("td", products.length), el("td", new Set(products.map(SupplierSearchCore.offerKey)).size), store, el("td", supplier.status === "unknown" ? "Поставщик неизвестен" : "По ID / ссылке магазина")); rows.push(row);
     if (open) { const child = el("tr", null, "tree-row"), cell = el("td"); cell.colSpan = 6; cell.append(productTree(products, images)); child.append(cell); rows.push(child); }
   }
+  const excluded = (result?.excluded_products || []).filter(product => matchesCategory(product) && matchesProduct(product));
+  if (excluded.length) {
+    const open = expanded.has("__excluded__"), row = el("tr", null, "excluded-category"), cell = el("td"), button = el("button", (open ? "▾ " : "▸ ") + "Не подходят — проверка пропущена · " + excluded.length + " карточек"); cell.colSpan = 6;
+    button.addEventListener("click", () => { if (expanded.has("__excluded__")) expanded.delete("__excluded__"); else expanded.add("__excluded__"); renderResult(); }); cell.append(button); row.append(cell); rows.push(row);
+    if (open) { const child = el("tr", null, "tree-row excluded-category"), inner = el("td"); inner.colSpan = 6; inner.append(productTree(excluded, images)); child.append(inner); rows.push(child); }
+  }
   $("suppliers").replaceChildren(...rows); $("empty").hidden = Boolean(rows.length);
   $("supplier-count").textContent = result?.total_suppliers || 0; $("card-count").textContent = result?.total_cards || 0; $("unknown-count").textContent = result?.unknown_cards || 0; $("task-count").textContent = result?.source_tasks.length || 0;
   $("unique-count").textContent = result?.unique_offers || 0; $("repeat-count").textContent = result?.duplicate_cards || 0;
-  $("unique-note").textContent = `Уникальность определяется по площадке и ID предложения, при отсутствии ID — по ссылке; на обычных сайтах — по полной ссылке с вариантом товара. Без ID и ссылки строки считаются отдельными. Все появления сохраняются.${result ? ` Среди карточек без поставщика уникальных: ${result.unknown_unique_offers}.` : ""}`;
+  $("unique-note").textContent = `Уникальность определяется по площадке и ID предложения, при отсутствии ID — по ссылке; на обычных сайтах — по полной ссылке с вариантом товара. Без ID и ссылки строки считаются отдельными. Все появления сохраняются.${result ? ` В проверку включено ${result.included_cards} карточек; не подходят: ${result.excluded_products.length}. Среди включённых карточек без поставщика уникальных: ${result.unknown_unique_offers}.` : ""}`;
   $("result-state").textContent = !result ? "Результат ещё не подготовлен" : state.job.status === "finished" ? "Итоговый результат" : "Предварительный результат · уточнение ещё не завершено";
 }
 async function refresh() {
@@ -107,7 +143,7 @@ async function refresh() {
     const changedJob = (job?.id || null) !== jobId;
     if (changedJob) { jobId = job?.id || null; expanded.clear(); intervalDirty = false; if (job) { selected.clear(); for (const task of job.source_tasks) selected.add(task.id); } }
     if (job && !intervalDirty && document.activeElement !== $("interval")) $("interval").value = job.interval_ms / 1000;
-    renderTasks(changedJob); controls();
+    renderRelevance(); renderTasks(changedJob); controls();
     $("badge").textContent = labels[job?.status] || "Задание не выбрано"; $("badge").dataset.state = job?.status || "";
     $("status").textContent = job?.message || "Выберите задания и обработайте сохранённые результаты.";
     $("challenge-alert").hidden = !(job?.status === "paused" && job.pause_reason === "challenge");
@@ -130,6 +166,17 @@ $("task-filter").addEventListener("input", () => renderTasks(true));
 $("select-all").addEventListener("click", () => { visibleTasks().forEach(task => selected.add(task.id)); renderTasks(true); });
 $("select-none").addEventListener("click", () => { selected.clear(); renderTasks(true); });
 $("refresh").addEventListener("click", () => { void action(() => Promise.resolve()); });
+$("relevance-criteria").addEventListener("input", () => { criteriaDirty = true; controls(); });
+for (const [id, format] of [["claude-json", "json"], ["claude-instructions", "instructions"]]) $(id).addEventListener("click", () => { void action(async () => { await send("RELEVANCE_EXPORT", { format, criteria: $("relevance-criteria").value, batch_index: criteriaMismatch() ? 0 : Number($("claude-batch").value) }); criteriaDirty = false; }); });
+$("import-relevance").addEventListener("click", () => $("relevance-file").click());
+$("relevance-file").addEventListener("change", () => {
+  const files = [...$("relevance-file").files]; if (!files.length) return;
+  void action(async () => {
+    if (files.length > 100 || files.some(file => file.size > 16 * 1024 * 1024) || files.reduce((n, file) => n + file.size, 0) > 32 * 1024 * 1024) throw new Error("Выберите до 100 файлов, каждый до 16 МиБ, суммарно до 32 МиБ.");
+    await send("RELEVANCE_IMPORT", { criteria: $("relevance-criteria").value, files: await Promise.all(files.map(file => file.text())) });
+  }).finally(() => { $("relevance-file").value = ""; });
+});
+$("reset-relevance").addEventListener("click", () => { void action(async () => { await send("RELEVANCE_RESET"); $("relevance-criteria").value = state.job?.relevance?.criteria || ""; criteriaDirty = false; }); });
 $("interval").addEventListener("input", () => { intervalDirty = true; });
 $("prepare-form").addEventListener("submit", event => { event.preventDefault(); void action(async () => { await send("SUPPLIERS_PREPARE", { task_ids: [...selected], interval_seconds: Number($("interval").value) }); intervalDirty = false; }); });
 $("start").addEventListener("click", () => {
@@ -145,7 +192,8 @@ $("save-interval").addEventListener("click", () => { void action(async () => { a
 for (const format of ["json", "csv"]) $("export-" + format).addEventListener("click", () => { void action(() => send("SUPPLIERS_EXPORT", { format })); });
 for (const id of ["export-xlsx", "result-export-xlsx"]) $(id).addEventListener("click", () => { void action(() => send("OPEN_EXCEL", { stage: 2 })); });
 $("filter").addEventListener("input", renderResult);
-$("expand-all").addEventListener("click", () => { for (const supplier of state?.result?.suppliers || []) expanded.add(supplier.key); renderResult(); });
+$("category-filter").addEventListener("change", () => { if ($("category-filter").value === "excluded") expanded.add("__excluded__"); renderResult(); });
+$("expand-all").addEventListener("click", () => { for (const supplier of state?.result?.suppliers || []) expanded.add(supplier.key); expanded.add("__excluded__"); renderResult(); });
 $("collapse-all").addEventListener("click", () => { expanded.clear(); renderResult(); });
 $("toggle-images").addEventListener("click", () => { void action(() => send("SET_VIEW", { history_images: !preferences.history_images })); });
 $("image-size").addEventListener("input", () => { draftImageSize = Number($("image-size").value); applySize(draftImageSize); });

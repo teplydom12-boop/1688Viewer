@@ -3,6 +3,7 @@ importScripts("shared.js");
 importScripts("page-data.js");
 importScripts("excel.js");
 importScripts("suppliers-core.js");
+importScripts("relevance.js");
 const S = globalThis.SupplierCollector;
 const ALARM = "1688-collector-progress";
 const RESPONSE_SCRIPT = "supplier-observed-responses";
@@ -629,6 +630,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     SUPPLIERS_STATE: () => SupplierStage.state(), SUPPLIERS_PREPARE: () => SupplierStage.prepare(message.options || {}),
     SUPPLIERS_START: () => SupplierStage.start(message.options || {}), SUPPLIERS_PAUSE: () => SupplierStage.pause(), SUPPLIERS_SKIP: () => SupplierStage.skip(),
     SUPPLIERS_INTERVAL: () => SupplierStage.setInterval(message.options || {}), SUPPLIERS_TAB: () => SupplierStage.showTab(), SUPPLIERS_EXPORT: () => SupplierStage.exportResult(message.options?.format),
+    RELEVANCE_EXPORT: () => SupplierStage.exportRelevance(message.options || {}), RELEVANCE_IMPORT: () => SupplierStage.importRelevance(message.options || {}),
+    RELEVANCE_OVERRIDE: () => SupplierStage.overrideRelevance(message.options || {}), RELEVANCE_RESET: () => SupplierStage.resetRelevance(),
     OPEN_SUPPLIERS: async () => { await chrome.tabs.create({ url: chrome.runtime.getURL("suppliers.html") }); return {}; },
     STATE: () => getState(false), DATA: () => getState(true), TASK: () => getTask(message.options?.id), TABS: listTabs,
     START: () => startRun(message.options || {}), ENRICH: () => startRun(message.options || {}, true),

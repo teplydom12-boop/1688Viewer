@@ -2,6 +2,7 @@
 // Runs inside the service worker. Stage 1 snapshots are never modified here.
 const SupplierStage = (() => {
   const C = globalThis.SupplierSearchCore, key = "supplier_search", cacheKey = "supplier_search_cache", alarm = "supplier-search-progress";
+  const R = globalThis.SupplierRelevance;
   let working = false, preparing = false;
   const attentionNotice = "supplier-search-attention";
   let attentionSync = Promise.resolve(), attentionVisual = null;
@@ -92,7 +93,7 @@ const SupplierStage = (() => {
     const job = await read(), { tasks = [], run, collection = emptyCollection() } = await chrome.storage.local.get(["tasks", "run", "collection"]);
     const history = storedTasks(tasks, run, collection).filter(task => task.kind !== "details").map(taskSummary).reverse();
     if (!job) return { tasks: history, job: null, result: null, first_stage_running: run?.status === "running", busy: busy() };
-    const { products, ...summary } = job;
+    const { products, relevance, ...summary } = job; summary.relevance = R.metadata(job);
     const origins = [...new Set(job.queue.slice(job.cursor).filter(entry => C.needsCheck(products, entry)).map(entry => S.originPattern(entry.product_url)))];
     if (job.required_origin) origins.push(job.required_origin);
     const required = [];
@@ -146,6 +147,58 @@ const SupplierStage = (() => {
       const job = await read(); if (!job || job.status === "finished") throw new Error("Нет активного задания этапа 2.");
       await chrome.storage.local.set({ [key]: { ...job, interval_ms: ms, next_open_at: job.last_completed_at ? job.last_completed_at + ms : job.next_open_at } });
       return { saved: true };
+    });
+  }
+  function requeue(job, products, relevance, message) {
+    const completed = job.queue.slice(0, job.cursor), keys = new Set(completed.map(entry => entry.key)), offers = new Set(completed.map(entry => entry.offer_key));
+    const pending = C.queue(products).filter(entry => !keys.has(entry.key) && !offers.has(entry.offer_key)), at = new Date().toISOString();
+    const paused = pending.length && job.status === "paused" && job.pause_reason === "challenge";
+    return { ...note(job, "relevance", message), products, relevance, queue: [...completed, ...pending], cursor: completed.length, skipped_count: 0,
+      status: pending.length ? paused ? "paused" : "ready" : "finished", finished_at: pending.length ? null : at,
+      pause_reason: paused ? "challenge" : null, current_key: pending.some(entry => entry.key === job.current_key) ? job.current_key : null,
+      required_origin: null, next_open_at: pending.length ? job.next_open_at : null };
+  }
+  async function editRelevance(operation) {
+    if (busy()) throw new Error("Дождитесь остановки проверки карточек перед изменением отбора.");
+    preparing = true;
+    try {
+      await guard();
+      return await withStateLock(async () => {
+        const job = await read(); if (!job || job.status === "running") throw new Error("Сначала подготовьте задания и приостановите проверку карточек.");
+        return operation(job);
+      });
+    } finally { preparing = false; }
+  }
+  async function exportRelevance(options) {
+    if (!["json", "instructions"].includes(options.format)) throw new Error("Выберите JSON или инструкцию для Claude.");
+    const result = await editRelevance(async job => {
+      const created = R.create(job, options.criteria, crypto.randomUUID(), new Date().toISOString());
+      const next = created.changed ? requeue(job, created.products, created.relevance, "Задание для Claude подготовлено. Пока решения не загружены, проверяются все карточки.") : job;
+      const payload = R.payload(next, options.batch_index ?? 0);
+      if (created.changed) await chrome.storage.local.set({ [key]: next });
+      return { payload, job_id: job.id };
+    });
+    const json = options.format === "json", body = json ? JSON.stringify(result.payload, null, 2) : R.instructions();
+    await chrome.downloads.download({ url: "data:" + (json ? "application/json" : "text/plain") + ";charset=utf-8," + encodeURIComponent(body),
+      filename: "claude-" + result.job_id + (json ? "-part-" + result.payload.part_number + ".json" : "-instruction.txt"), saveAs: true });
+    return { exported: true, parts: result.payload.total_parts };
+  }
+  async function importRelevance(options) {
+    return editRelevance(async job => {
+      const result = R.apply(job, options.files, options.criteria, new Date().toISOString());
+      const message = "Решения загружены: " + result.stats.applied_unique + " уникальных карточек. Ручных решений сохранено: " + result.stats.preserved_manual + ". Неподтверждённых исключений оставлено для уточнения: " + result.stats.downgraded_unique + ".";
+      await chrome.storage.local.set({ [key]: requeue(job, result.products, job.relevance, message) }); return result.stats;
+    });
+  }
+  async function overrideRelevance(options) {
+    return editRelevance(async job => {
+      const products = R.override(job, options.card_id, options.status, new Date().toISOString());
+      await chrome.storage.local.set({ [key]: requeue(job, products, job.relevance, "Категория изменена вручную для всех появлений карточки.") }); return { saved: true };
+    });
+  }
+  async function resetRelevance() {
+    return editRelevance(async job => {
+      await chrome.storage.local.set({ [key]: requeue(job, R.reset(job), job.relevance, "Отбор сброшен. Все карточки снова участвуют в проверке поставщиков; предыдущие открытия не повторяются.") }); return { reset: true };
     });
   }
   async function waitTab(tabId, jobId, expected = null) {
@@ -248,6 +301,7 @@ const SupplierStage = (() => {
     return { ...result, exported_at: new Date().toISOString(), total_products: products.length, total_tasks: result.source_tasks.length, products,
       suppliers: result.suppliers.filter(item => item.status !== "unknown").map(item => ({ ...item, products: item.products.map(convert) })),
       unresolved_products: result.suppliers.filter(item => item.status === "unknown").flatMap(item => item.products.map(convert)), pages: [],
+      excluded_products: result.excluded_products.map(convert),
       tasks: result.source_tasks.map(task => ({ ...task, products: products.filter(row => row.source_task_id === task.id), pages: [], log: [] })) };
   }
   async function exportResult(format = "json") {
@@ -258,8 +312,9 @@ const SupplierStage = (() => {
     if (format === "json") body = JSON.stringify(result, null, 2);
     else {
       const escape = value => { let text = String(value ?? ""); if (/^[=+@-]/.test(text.trimStart())) text = "'" + text; return '"' + text.replace(/"/g, '""') + '"'; };
-      const fields = ["Поставщик", "Магазин", "Площадка", "Статус", "Товар", "Карточка", "Задание", "ID наблюдения"];
-      const lines = result.suppliers.flatMap(supplier => supplier.products.map(row => [supplier.shop_name, supplier.supplier_url, row.source, supplier.status === "unknown" ? C.unknown : "Определён", row.title, row.product_url, row.source_task_name, row.observation_id]));
+      const fields = ["Поставщик", "Магазин", "Площадка", "Статус", "Товар", "Карточка", "Задание", "ID наблюдения", "Категория", "Причина отбора", "Цитата"];
+      const lines = result.suppliers.flatMap(supplier => supplier.products.map(row => [supplier.shop_name, supplier.supplier_url, row.source, supplier.status === "unknown" ? C.unknown : "Определён", row.title, row.product_url, row.source_task_name, row.observation_id, R.labels[row.relevance?.status || "unreviewed"], row.relevance?.reason, row.relevance?.evidence]));
+      lines.push(...result.excluded_products.map(row => [row.supplier?.shop_name, row.supplier?.supplier_url, row.source, "Проверка пропущена: не подходит", row.title, row.product_url, row.source_task_name, row.observation_id, R.labels.excluded, row.relevance?.reason, row.relevance?.evidence]));
       body = "\uFEFF" + [fields, ...lines].map(line => line.map(escape).join(";")).join("\r\n");
     }
     await chrome.downloads.download({ url: "data:" + (format === "json" ? "application/json" : "text/csv") + ";charset=utf-8," + encodeURIComponent(body), filename: "supplier-search-" + job.id + "." + format, saveAs: true });
@@ -270,7 +325,7 @@ const SupplierStage = (() => {
     await change(job.id, current => ({ ...current, stage: "reading", message: S.text(detail.message)?.slice(0, 500) || current.message }));
   }
   async function closed(tabId) { const job = await read(); if (job?.tab_id === tabId && job.status === "running") await pause("tab-closed", "Рабочая вкладка закрыта. Нажмите «Продолжить», чтобы открыть её заново."); }
-  return { busy, isRunning, prepare, state, start, pause, skip, setInterval, process, showTab, exportResult, excelSnapshot, progress, closed, syncAttention, openAttention, alarm, key, cacheKey };
+  return { busy, isRunning, prepare, state, start, pause, skip, setInterval, process, showTab, exportResult, excelSnapshot, exportRelevance, importRelevance, overrideRelevance, resetRelevance, progress, closed, syncAttention, openAttention, alarm, key, cacheKey };
 })();
 chrome.storage.onChanged?.addListener((changes, area) => { if (area === "local" && "supplier_search" in changes) void SupplierStage.syncAttention().catch(() => {}); });
 chrome.notifications?.onClicked?.addListener(id => { void SupplierStage.openAttention(id).catch(() => {}); });

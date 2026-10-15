@@ -332,7 +332,7 @@
       if (raw) occurrenceRaw.push({ product_id: item.product_id, source: item.source, page_card_key: pageCardKey, source_page_url: url, collected_at: timestamp, html: node ? sanitizedCard(node, url) || "" : "", record: item });
     }
     return { products, cards, raw_cards: occurrenceRaw, diagnostics: {
-      engine_version: "0.13.0", source, methods: [...new Set(candidates.map(item => item.method))], expected_page_size: expectedPageSize(doc, url), page_context: mode === "search" ? pageContext(doc, url) : null,
+      engine_version: "0.14.0", source, methods: [...new Set(candidates.map(item => item.method))], expected_page_size: expectedPageSize(doc, url), page_context: mode === "search" ? pageContext(doc, url) : null,
       data_truncated: Boolean(additions.truncated), data_truncation_reasons: additions.truncation_reasons || [], component_discovery_limited: additions.component_discovery_limited || false, pagination: additions.pagination,
       price_conflicts: conflicting.length,
       inferred_cards: products.filter(item => item.extraction_confidence < 90).length, no_detail_links: products.filter(item => !item.product_url).length,

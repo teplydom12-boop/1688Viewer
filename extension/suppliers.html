@@ -2,7 +2,7 @@
 <html lang="ru">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Этап 2, поиск поставщиков — Supplier Viewer</title><link rel="stylesheet" href="dashboard.css"><link rel="stylesheet" href="suppliers.css"></head>
 <body>
-  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>Этап 2, поиск поставщиков</small></div></div><nav class="app-nav" aria-label="Разделы"><a href="dashboard.html">Этап 1, сбор выдачи</a><a href="history.html" id="history-link" class="history-nav">История проверок</a><a href="suppliers.html" aria-current="page">Этап 2, поиск поставщиков</a></nav><span class="version">0.13</span></header>
+  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>Этап 2, поиск поставщиков</small></div></div><nav class="app-nav" aria-label="Разделы"><a href="dashboard.html">Этап 1, сбор выдачи</a><a href="history.html" id="history-link" class="history-nav">История проверок</a><a href="suppliers.html" aria-current="page">Этап 2, поиск поставщиков</a></nav><span class="version">0.14</span></header>
   <main class="stage-workspace">
     <div class="page-heading"><div><h1>Этап 2, поиск поставщиков</h1><p class="muted">Выберите задания с любых площадок. В результат попадут только уже найденные карточки. Цена и минимальный заказ не влияют на отбор.</p></div><div class="exports"><button id="export-json" class="primary" disabled>Скачать JSON</button><button id="export-xlsx" disabled>Excel (.xlsx)</button><button id="export-csv" disabled>CSV</button></div></div>
     <p id="error" class="error" role="alert" hidden></p>
@@ -14,8 +14,16 @@
       <p class="muted">Текущий результат сохраняется между запусками. Подготовка другого набора заданий заменит эту таблицу; для отдельного архива скачайте JSON или Excel.</p>
       <p id="first-stage-note" class="warnings" hidden>Этап 1 выполняется. Приостановите его перед запуском поиска поставщиков.</p>
     </section>
+    <section class="relevance-panel" aria-labelledby="relevance-heading">
+      <h2 id="relevance-heading">2. Отбор карточек через Claude — по желанию</h2>
+      <label for="relevance-criteria">Какой товар ищем</label><textarea id="relevance-criteria" maxlength="2000" rows="3" placeholder="Например: самостоятельный сетевой дровокол 220 В. Не аккумуляторный, не запчасти и не насадка для экскаватора."></textarea>
+      <p class="muted">Скачайте инструкцию и JSON, вручную прикрепите их в Claude. Попросите сохранить ответ в JSON и загрузите его сюда. Расширение само не обращается к AI-сервисам. Названия на разных языках передаются в исходном виде.</p>
+      <div class="relevance-actions"><button id="claude-instructions" disabled>Скачать инструкцию</button><select id="claude-batch" aria-label="Часть задания для Claude"><option value="0">Часть 1</option></select><button id="claude-json" class="primary" disabled>Скачать JSON для Claude</button><button id="import-relevance" disabled>Загрузить решения Claude</button><input id="relevance-file" type="file" accept=".json,.txt,application/json" multiple hidden><button id="reset-relevance" disabled>Сбросить отбор: проверять все</button></div>
+      <progress id="relevance-progress" max="1" value="0" aria-label="Оценено уникальных карточек"></progress><p id="relevance-summary" role="status" aria-live="polite" class="muted">Без загруженных решений проверяются все карточки.</p><p id="relevance-draft" class="warnings" hidden>Описание изменено. Скачайте новый JSON для Claude или сбросьте отбор перед проверкой поставщиков.</p>
+      <p class="muted">В одной части до 200 уникальных карточек. Загружайте ответы по частям; отсутствующие решения остаются неоценёнными. Проверяются подходящие, спорные и неоценённые карточки. Явно неподходящие сохраняются отдельной категорией. Новое описание и новый JSON сбрасывают прежние решения. Категории можно изменить вручную в дереве карточек.</p>
+    </section>
     <section class="job" aria-labelledby="progress-heading">
-      <div class="job-heading"><h2 id="progress-heading">2. Уточнение поставщиков по карточкам</h2><span id="badge">Задание не выбрано</span></div>
+      <div class="job-heading"><h2 id="progress-heading">3. Проверка поставщиков</h2><span id="badge">Задание не выбрано</span></div>
       <p id="status" role="status" aria-live="polite">Выберите задания и обработайте сохранённые результаты.</p>
       <div id="challenge-alert" class="challenge-alert" role="alert" hidden><strong>Нужна проверка безопасности — работа на паузе</strong><p>Откройте рабочую вкладку, пройдите капчу или вход вручную, вернитесь сюда и нажмите «Продолжить».</p><button id="challenge-tab">Открыть рабочую вкладку ↗</button></div>
       <p id="notification-error" class="warnings" hidden></p>
@@ -27,15 +35,15 @@
       <div class="stage-actions"><button id="start" class="primary" disabled>Открыть карточки</button><button id="pause" disabled>Пауза</button><button id="show-tab" disabled>Рабочая вкладка / капча ↗</button><button id="skip" disabled>Пропустить проверку карточек и получить итог</button></div>
     </section>
     <section aria-labelledby="result-heading">
-      <div class="navigation-heading"><h2 id="result-heading">3. Таблица поставщиков</h2><span id="result-state" class="muted">Результат ещё не подготовлен</span><button id="result-export-xlsx" class="primary" disabled>Скачать таблицу Excel (.xlsx)</button></div>
+      <div class="navigation-heading"><h2 id="result-heading">4. Таблица поставщиков</h2><span id="result-state" class="muted">Результат ещё не подготовлен</span><button id="result-export-xlsx" class="primary" disabled>Скачать таблицу Excel (.xlsx)</button></div>
       <div class="stats"><div><strong id="supplier-count">0</strong><span>поставщиков определено</span></div><div><strong id="card-count">0</strong><span>карточек с повторами</span></div><div><strong id="unique-count">0</strong><span>уникальных карточек</span></div><div><strong id="repeat-count">0</strong><span>повторных появлений</span></div><div><strong id="unknown-count">0</strong><span>карточек без поставщика</span></div><div><strong id="task-count">0</strong><span>выбранных заданий</span></div></div>
       <p id="unique-note" class="muted">Уникальность определяется по площадке и ID предложения, при отсутствии ID — по ссылке. Это справочная информация: все повторные появления сохраняются.</p>
-      <div class="filter-row"><input id="filter" type="search" placeholder="Поставщик, товар или задание" aria-label="Найти поставщика или карточку"><button id="expand-all">Раскрыть всё</button><button id="collapse-all">Свернуть всё</button></div>
+      <div class="filter-row"><input id="filter" type="search" placeholder="Поставщик, товар или задание" aria-label="Найти поставщика или карточку"><select id="category-filter" aria-label="Категория релевантности"><option value="">Все категории</option><option value="relevant">Подходят</option><option value="uncertain">Нужно уточнить</option><option value="unreviewed">Не оценивались</option><option value="excluded">Не подходят — проверка пропущена</option></select><button id="expand-all">Раскрыть всё</button><button id="collapse-all">Свернуть всё</button></div>
       <div class="image-controls"><button id="toggle-images" aria-pressed="false">Показать картинки</button><label for="image-size">Размер картинок</label><input id="image-size" type="range" min="32" max="192" step="16" value="48"><output id="image-size-value" for="image-size">48 px</output></div>
       <div class="table-wrap"><table class="supplier-table"><thead><tr><th>Поставщик / найденные карточки</th><th>Площадка</th><th>Всего карточек</th><th>Уникальных</th><th>Магазин</th><th>Определение</th></tr></thead><tbody id="suppliers"></tbody></table><p id="empty" class="empty">Здесь появятся поставщики и дерево найденных карточек. Неопределённые продавцы получат пометку «Поставщик неизвестен».</p></div>
-      <p class="muted">Совпадение названий или фотографий не объединяет поставщиков. Группа «Поставщик неизвестен» содержит неустановленных продавцов и не считается одной компанией. Повторные появления карточек сохранены.</p>
+      <p class="muted">Совпадение названий или фотографий не объединяет поставщиков. Группа «Поставщик неизвестен» содержит неустановленных продавцов и не считается одной компанией. Неподходящие карточки вынесены в отдельную категорию; все повторные появления сохранены.</p>
     </section>
     <details class="activity"><summary>Журнал этапа 2</summary><ol id="log"></ol></details>
   </main>
-  <script src="shared.js"></script><script src="images.js"></script><script src="suppliers-core.js"></script><script src="suppliers.js"></script>
+  <script src="shared.js"></script><script src="images.js"></script><script src="suppliers-core.js"></script><script src="relevance.js"></script><script src="suppliers.js"></script>
 </body></html>
