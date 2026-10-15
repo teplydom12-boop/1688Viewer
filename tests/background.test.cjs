@@ -16,19 +16,20 @@ test("background with simulated Chrome APIs collects two real DOM pages and expo
   assert.equal((await h.command("START", { max_pages: 3, scroll: false, query: "Чашки" })).ok, true);
   await h.waitFor(data => data.run?.status === "finished");
   const state = (await h.command("STATE")).result;
-  assert.equal(state.count, 3);
+  assert.equal(state.count, 4);
   assert.equal(state.page_count, 2);
   assert.equal(state.run.completed_pages, 2);
   assert.match(state.run.message, /кнопка/i);
   assert.equal((await h.command("EXPORT")).ok, true);
   const output = JSON.parse(decodeURIComponent(h.downloads[0].url.split(",").slice(1).join(",")));
-  assert.equal(output.total_products, 3);
+  assert.equal(output.total_products, 4);
   assert.equal(output.schema_version, 3);
   assert.equal(output.pages.length, 2);
   const duplicate = output.products.find(item => item.product_id === "1001");
   assert.equal(duplicate.price, "¥12.50");
   assert.equal(duplicate.shop_name, "浙江水杯工厂");
-  assert.equal(duplicate.sightings.length, 2);
+  assert.equal(duplicate.sightings.length, 1);
+  assert.equal(output.products.filter(item => item.product_id === "1001").length, 2);
   assert.equal(duplicate.query, "Чашки");
   assert.equal(output.products.find(item => item.product_id === "1002").minimum_order, null);
   assert.equal(h.downloads[0].saveAs, true);
@@ -63,7 +64,7 @@ test("stored checkpoints resume after a background restart", async t => {
   h.resume();
   await h.waitFor(data => data.run?.status === "finished");
   assert.equal(h.data.run.completed_pages, 2);
-  assert.equal(h.data.collection.products.length, 3);
+  assert.equal(h.data.collection.products.length, 4);
 });
 
 test("captcha pauses collection, invalid tabs and untrusted messages are rejected", async t => {

@@ -17,7 +17,7 @@ function productTable(products) {
   const body = element("tbody");
   for (const product of products) {
     const row = element("tr"); const title = element("td", product.title || "Название не получено", "title-cell");
-    title.append(element("small", `ID: ${product.product_id}${product.query ? " · " + product.query : ""}`));
+    title.append(element("small", `ID: ${product.product_id}${product.query ? " · " + product.query : ""}${product.page_index ? ` · Страница ${product.page_index}` : ""}${product.card_index ? ` · Позиция ${product.card_index}` : ""}`));
     if (product.extraction_confidence) title.append(element("small", `Оценка извлечения: ${product.extraction_confidence}/100 · ${product.identity_type === "card-fingerprint" ? "без официального ID" : product.identity_type || "ID товара"}`, "confidence"));
     const price = element("td", product.price || "—"); if (product.data_conflicts?.length) { price.append(element("small", "Источники расходятся", "confidence")); price.title = product.data_conflicts.flatMap(conflict => conflict.observations.map(item => `${item.value} (${item.method})`)).join("; "); } const moq = element("td", product.minimum_order || "—");
     const link = element("td"); link.append(safeLink(product.product_url, "Открыть ↗"));
@@ -50,7 +50,7 @@ function renderTable() {
   }));
   $("unresolved-section").hidden = !unresolved.length;
   $("empty").hidden = Boolean(groups.length || unresolved.length);
-  $("filtered-count").textContent = `${groups.length} поставщиков · ${groups.reduce((count, group) => count + group.products.length, 0) + unresolved.length} товаров`;
+  $("filtered-count").textContent = `${groups.length} поставщиков · ${groups.reduce((count, group) => count + group.products.length, 0) + unresolved.length} карточек`;
 }
 async function renderTasks() {
   const tasks = state.tasks || [], selected = $("task-filter").value;
@@ -68,11 +68,11 @@ async function renderTasks() {
     progressCell.append(progress, element("small", `${task.completed_pages}/${task.max_pages} стр.${task.partial_page_count ? " · есть сохранённая часть страницы" : ""}${task.phase === "details" ? ` · ${task.detail_index}/${task.detail_total} карточек` : ""}`, "confidence"));
     row.append(name, element("td", task.source || "—"), status, progressCell, element("td", task.product_count)); return row;
   }));
-  const all = element("option", "Вся память — уникальные товары"); all.value = "";
+  const all = element("option", "Вся память — карточки с повторами"); all.value = "";
   $("task-filter").replaceChildren(all, ...tasks.map(task => { const option = element("option", `${task.query || "Без метки"} · ${task.source || "Проверка"} · ${new Date(task.started_at).toLocaleString("ru-RU")}`); option.value = task.id; return option; }));
   $("task-filter").value = tasks.some(task => task.id === selected) ? selected : "";
   taskView = $("task-filter").value ? await send("TASK", { id: $("task-filter").value }) : null;
-  $("task-view-note").textContent = taskView ? "Снимок результатов выбранного задания. Экспорт сохраняет всю память, включая остальные задания." : "Последние сохранённые сведения о каждом уникальном товаре. Экспорт сохраняет всю память.";
+  $("task-view-note").textContent = taskView ? "Снимок результатов выбранного задания. Экспорт сохраняет всю память, включая остальные задания." : "Все сохранённые карточки, включая повторы. Отбор и удаление дублей будут отдельным этапом.";
   renderTable();
 }
 async function refreshTabs() {
@@ -125,7 +125,7 @@ async function refresh(dataUpdated = false) {
     const run = state.run;
     const detailPhase = run?.phase === "details";
     $("progress").value = !run ? 0 : run.status === "finished" ? 100 : detailPhase ? 100 * run.detail_index / Math.max(1, run.detail_total) : 100 * run.completed_pages / Math.max(1, run.max_pages);
-    $("progress-label").textContent = run ? `Страницы: ${run.completed_pages}/${run.max_pages} · Товаров сохранено: ${state.tasks.find(task => task.id === run.id)?.product_count || 0}${detailPhase ? ` · Карточки: ${run.detail_index}/${run.detail_total}` : ""}${run.current_count ? ` · На текущей странице: ${run.current_count}` : ""}` : "";
+    $("progress-label").textContent = run ? `Страницы: ${run.completed_pages}/${run.max_pages} · Карточек сохранено: ${state.tasks.find(task => task.id === run.id)?.product_count || 0}${detailPhase ? ` · Карточки: ${run.detail_index}/${run.detail_total}` : ""}${run.current_count ? ` · На текущей странице: ${run.current_count}` : ""}` : "";
     $("warnings").replaceChildren(...state.warnings.map(warning => element("li", warning))); $("warnings").hidden = !state.warnings.length;
     if (dataChanged) {
       const selectedSource = $("source-filter").value;

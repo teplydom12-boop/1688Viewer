@@ -57,8 +57,8 @@ test("one new item mixed with 60 old items pauses without advancing or relabelli
   await h.command("START", { query: "Regression", max_pages: 2, scroll: true, interval_seconds: 1 });
   await h.waitFor(data => data.run?.status === "paused", 60000); await h.waitFor(() => h.idle());
   assert.equal(h.data.run.pause_reason, "incomplete-results"); assert.equal(h.data.run.completed_pages, 1);
-  assert.equal(h.data.collection.products.length, 61); assert.equal(h.data.collection.pages.filter(page => !page.partial).length, 1);
-  assert.ok(h.data.collection.products.filter(item => Number(item.product_id) < 200000).every(item => item.source_page_url.endsWith("page=1")));
+  assert.equal(h.data.collection.products.length, 121); assert.equal(h.data.collection.pages.filter(page => !page.partial).length, 1);
+  assert.ok(h.data.collection.products.filter(item => item.capture_status === "confirmed" && Number(item.product_id) < 200000).every(item => item.source_page_url.endsWith("page=1")));
   assert.equal(h.data.collection.pages.at(-1).diagnostics.collection_quality.new_count, 1);
   await h.page.evaluate(html => { document.querySelector(".grid").innerHTML = html; document.querySelector("nav").innerHTML = '<button disabled>Next page</button>'; }, cards(200000, 60));
   assert.equal((await h.command("RESUME")).ok, true);
@@ -70,18 +70,18 @@ test("one new item mixed with 60 old items pauses without advancing or relabelli
 test("popup count and preview belong to the new task while all accumulated memory stays available", async t => {
   const h = await createHarness(browser, t); await collect(h, "Первый");
   await h.page.goto(h.initialUrl.replace("page=1", "page=2")); await collect(h, "Второй");
-  assert.equal(h.data.collection.products.length, 3);
+  assert.equal(h.data.collection.products.length, 4);
   const ui = await h.context.newPage();
   await ui.exposeFunction("__command", ({ type, options }) => h.command(type, options));
   await ui.addInitScript(() => { globalThis.chrome = { runtime: { sendMessage: message => __command(message) }, storage: { onChanged: { addListener() {} } } }; });
   await ui.route("https://collector.test/**", route => { const f = new URL(route.request().url()).pathname.slice(1); return route.fulfill({ body: fs.readFileSync(path.join(__dirname, "../extension", f)), contentType: f.endsWith(".js") ? "text/javascript" : f.endsWith(".css") ? "text/css" : "text/html; charset=utf-8" }); });
   await ui.goto("https://collector.test/popup.html"); await ui.waitForFunction(() => document.getElementById("count").textContent === "2");
-  assert.match(await ui.locator("#task-count").textContent(), /Всего товаров в памяти: 3/);
+  assert.match(await ui.locator("#task-count").textContent(), /Всего карточек в памяти: 4/);
   assert.match(await ui.locator("#count-label").textContent(), /задании/);
   assert.doesNotMatch(await ui.locator("#preview").textContent(), /不锈钢保温杯/);
   await h.command("START", { query: "Третий", max_pages: 1, scroll: true });
   const state = (await h.command("STATE")).result;
-  assert.equal(state.current_task.product_count, 0); assert.equal(state.current_task.page_count, 0); assert.equal(state.current_task.preview.length, 0); assert.equal(state.count, 3);
+  assert.equal(state.current_task.product_count, 0); assert.equal(state.current_task.page_count, 0); assert.equal(state.current_task.preview.length, 0); assert.equal(state.count, 4);
   await h.command("PAUSE"); await h.waitFor(() => h.idle());
 });
 

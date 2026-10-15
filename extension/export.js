@@ -14,7 +14,7 @@ async function initialize() {
     const origins = SupplierImages.origins(imageUrls);
     const permissions = await Promise.all(origins.map(async origin => await chrome.permissions.contains({ origins: [origin] }) ? null : origin));
     requiredOrigins = permissions.filter(Boolean);
-    $("summary").textContent = `${taskId ? "Выбранная проверка" : "Вся память"}: ${snapshot.total_products} товаров · ${snapshot.total_tasks} проверок · ${imageUrls.length} разных изображений. Снимок данных на ${new Date(snapshot.exported_at).toLocaleString("ru-RU")}.`;
+    $("summary").textContent = `${taskId ? "Выбранная проверка" : "Вся память"}: ${snapshot.total_products} карточек (с повторами) · ${snapshot.total_tasks} проверок · ${imageUrls.length} разных изображений. Снимок данных на ${new Date(snapshot.exported_at).toLocaleString("ru-RU")}.`;
     $("download").disabled = false;
   } catch (cause) { error(cause.message); }
 }

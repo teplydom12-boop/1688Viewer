@@ -10,7 +10,7 @@ let processing = false, starting = false, stateQueue = Promise.resolve();
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const emptyCollection = () => ({ products: [], pages: [], raw_cards: [] });
 const productKey = item => `${item.source}:${item.product_id}`;
-// History holds each task's own observations; the collection holds the merged memory.
+// Each stored row is one card appearance. Equal offer IDs never collapse here.
 function taskRecord(run, previous = {}) {
   const record = { ...previous };
   for (const field of ["id", "kind", "query", "source", "source_url", "started_at", "updated_at", "finished_at", "status", "phase", "stage", "message", "pause_reason", "completed_pages", "max_pages", "detail_index", "detail_total", "current_count", "log"]) record[field] = run[field] ?? null;
@@ -19,13 +19,14 @@ function taskRecord(run, previous = {}) {
 function storedTasks(tasks = [], run, collection = emptyCollection()) {
   if (!run || tasks.some(task => task.id === run.id)) return tasks;
   const keys = new Set(run.product_keys || []);
-  return [...tasks, taskRecord(run, { products: collection.products.filter(item => keys.has(productKey(item))), pages: collection.pages.filter(page => page.checkpoint?.startsWith(`${run.id}:`)) })];
+  return [...tasks, taskRecord(run, { products: collection.products.filter(item => item.observation_id ? item.task_id === run.id : keys.has(productKey(item))), pages: collection.pages.filter(page => page.checkpoint?.startsWith(`${run.id}:`)) })];
 }
 function unassignedMemory(collection, tasks) {
   const keys = new Set(tasks.flatMap(task => task.products.map(productKey)));
+  const observations = new Set(tasks.flatMap(task => task.products.map(item => item.observation_id).filter(Boolean)));
   const ids = new Set(tasks.map(task => task.id));
   return {
-    products: collection.products.filter(item => !keys.has(productKey(item))).map(item => ({ ...item, task_ids: [] })),
+    products: collection.products.filter(item => item.observation_id ? !observations.has(item.observation_id) : !keys.has(productKey(item))).map(item => ({ ...item, task_ids: [] })),
     pages: collection.pages.filter(page => !ids.has(page.task_id) && !tasks.some(task => page.checkpoint?.startsWith(`${task.id}:`))),
     raw_cards: (collection.raw_cards || []).filter(card => !ids.has(card.task_id))
   };
@@ -35,7 +36,7 @@ function rebuildMemory(tasks, independent, rawCards) {
   observations.sort((a, b) => (Date.parse(a.last_seen_at || a.collected_at) || 0) - (Date.parse(b.last_seen_at || b.collected_at) || 0));
   const ids = new Set(tasks.map(task => task.id));
   return {
-    products: S.mergeProducts([], observations),
+    products: observations,
     pages: [...independent.pages, ...tasks.flatMap(task => task.pages.map(page => ({ ...page, task_id: task.id })))],
     raw_cards: rawCards.filter(card => !card.task_id || ids.has(card.task_id))
   };
@@ -161,16 +162,30 @@ async function waitForTab(tabId, id) {
   throw new Error("Страница долго загружается. Дождитесь загрузки и продолжите работу.");
 }
 function mergeResult(collection, result, partial, checkpoint) {
-  const products = S.mergeProducts(collection.products, result.products);
-  const rawKey = card => `${card.source}:${card.product_id}:${card.source_page_url}:${card.task_id || "legacy"}`;
-  const raw = new Map((collection.raw_cards || []).map(card => [rawKey(card), card]));
-  for (const card of result.raw_cards || []) raw.set(rawKey(card), card);
-  let pages = collection.pages || [];
-  if (result.page) {
-    pages = pages.filter(page => page.checkpoint !== checkpoint && !(page.task_id === result.page.task_id && page.page_url === result.page.page_url && page.query === result.page.query && page.fingerprint === result.page.fingerprint));
-    pages.push({ ...result.page, partial, checkpoint });
+  if (!result.page) {
+    // Explicit detail checks update supplier evidence without erasing captured
+    // rows, prices or provenance. A detail-only task can own its own observation.
+    const updates = new Map(result.products.map(item => [productKey(item), item]));
+    const products = collection.products.map(item => {
+      const update = updates.get(productKey(item)); if (!update) return item;
+      const copy = { ...item, field_sources: { ...item.field_sources }, field_confidence: { ...item.field_confidence } };
+      for (const field of ["shop_name", "supplier_url", "supplier_id", "detail_checked_at"]) if (update[field]) { copy[field] = update[field]; if (update.field_sources?.[field]) copy.field_sources[field] = update.field_sources[field]; }
+      for (const field of ["title", "price", "minimum_order", "image_url"]) if (!copy[field] && update[field]) { copy[field] = update[field]; if (update.field_sources?.[field]) copy.field_sources[field] = update.field_sources[field]; }
+      return copy;
+    });
+    for (const item of result.products) if (!products.some(old => productKey(old) === productKey(item))) products.push({ ...item, observation_id: item.observation_id || crypto.randomUUID(), capture_status: "detail" });
+    return { ...collection, products };
   }
-  return { products, pages, raw_cards: [...raw.values()] };
+  const prior = collection.products.filter(item => item.checkpoint_id === checkpoint);
+  const samples = partial ? S.mergeCardSamples(prior, result.products) : result.products;
+  const rawKey = card => card.observation_id || `${card.source}:${card.product_id}:${card.source_page_url}:${card.task_id || "legacy"}`;
+  const raw = new Map((collection.raw_cards || []).filter(card => partial || card.checkpoint_id !== checkpoint).map(card => [rawKey(card), card]));
+  for (const card of result.raw_cards || []) raw.set(rawKey(card), card);
+  return {
+    products: [...collection.products.filter(item => item.checkpoint_id !== checkpoint), ...samples],
+    pages: [...(collection.pages || []).filter(page => page.checkpoint !== checkpoint), { ...result.page, partial, checkpoint }],
+    raw_cards: [...raw.values()]
+  };
 }
 async function saveSearch(id, result, partial = false) {
   return withStateLock(async () => {
@@ -178,21 +193,31 @@ async function saveSearch(id, result, partial = false) {
     if (run?.id !== id || (!partial && run.status !== "running")) return null;
     if (!partial) {
       const known = run.seen_fingerprints.flatMap(value => value.split(",").filter(Boolean));
-      const coverage = S.collectionQuality(result.products, { known_keys: known, expected_count: result.page.diagnostics?.expected_page_size || run.previous_fingerprint?.split(",").length, check_count: run.scroll, terminal: result.page.diagnostics?.collection_quality?.terminal, page_context: result.page.diagnostics?.page_context, append_mode: run.collection_mode === "append" });
+      const coverage = S.collectionQuality(result.products, { known_keys: known, expected_count: result.page.diagnostics?.expected_page_size || run.previous_card_count || run.previous_fingerprint?.split(",").length, check_count: run.scroll, terminal: result.page.diagnostics?.collection_quality?.terminal, page_context: result.page.diagnostics?.page_context, append_mode: run.collection_mode === "append", allow_repeats: run.allow_repeats === true });
       if (!coverage.complete) {
         const error = new Error(`Страница не засчитана: найдено ${coverage.observed_count}, новых ${coverage.new_count}, повторных ${coverage.repeated_count}. Дождитесь загрузки выдачи и нажмите «Продолжить».`);
         error.code = "INCOMPLETE_RESULTS";
-        const knownSet = new Set(known);
-        error.partial = { ...result, products: coverage.reason === "page-mismatch" ? [] : result.products.filter(item => !knownSet.has(productKey(item))), raw_cards: coverage.reason === "page-mismatch" ? [] : (result.raw_cards || []).filter(card => !knownSet.has(productKey(card))), page: { ...result.page, diagnostics: { ...result.page.diagnostics, collection_quality: coverage }, warnings: [...(result.page.warnings || []), error.message] } };
+        error.partial = { ...result, page: { ...result.page, diagnostics: { ...result.page.diagnostics, collection_quality: coverage }, warnings: [...(result.page.warnings || []), error.message] } };
         throw error;
       }
     }
-    result = { ...result, products: result.products.map(item => ({ ...item, task_ids: [id] })), page: result.page ? { ...result.page, task_id: id } : null, raw_cards: (result.raw_cards || []).map(card => ({ ...card, task_id: id })) };
-    if (!partial && run.seen_fingerprints.includes(result.page.fingerprint)) throw new Error("Повторилась уже собранная выдача. Проверьте страницу и продолжите сбор.");
-    const merged = mergeResult(collection, result, partial, `${id}:${run.completed_pages}`);
+    const checkpoint = `${id}:${run.completed_pages}`, observedCount = result.products.length;
+    let incoming = result.products;
+    if (run.collection_mode === "append") {
+      const priorSlots = new Set(collection.products.filter(item => item.task_id === id && item.checkpoint_id !== checkpoint && S.canonicalUrl(item.source_page_url) === S.canonicalUrl(result.page.page_url)).map(item => item.page_card_key));
+      incoming = incoming.filter(item => !priorSlots.has(item.page_card_key));
+    }
+    const previous = new Map(collection.products.filter(item => item.checkpoint_id === checkpoint).map(item => [item.page_card_key, item]));
+    const rows = incoming.map((item, index) => ({ ...item, observation_id: previous.get(item.page_card_key)?.observation_id || crypto.randomUUID(), checkpoint_id: checkpoint, task_id: id, task_ids: [id], page_index: run.completed_pages + 1, card_index: index + 1, capture_status: partial ? "partial" : "confirmed" }));
+    const appearances = new Map(rows.map(item => [item.page_card_key, item]));
+    result = { ...result, products: rows, page: result.page ? { ...result.page, product_count: rows.length, task_id: id, collection_mode: "all_cards" } : null,
+      raw_cards: (result.raw_cards || []).filter(card => appearances.has(card.page_card_key)).map(card => ({ ...card, ...Object.fromEntries(["observation_id", "checkpoint_id", "task_id", "page_index", "card_index", "capture_status"].map(field => [field, appearances.get(card.page_card_key)[field]])) })) };
+    const verified = run.allow_repeats || S.pageChangeConfirmed(result.page.page_url, result.page.diagnostics, run.last_page_url, run.previous_page_context, run.previous_document_id);
+    if (!partial && run.seen_fingerprints.includes(result.page.fingerprint) && !verified && run.collection_mode !== "append") throw new Error("Переход на следующую страницу не подтверждён. Проверьте страницу и продолжите сбор.");
+    const merged = mergeResult(collection, result, partial, checkpoint);
     const keys = [...new Set([...(run.product_keys || []), ...result.products.map(productKey)])];
     let next = { ...run, product_keys: keys };
-    if (!partial) next = logEntry({ ...next, completed_pages: run.completed_pages + 1, previous_fingerprint: result.page.fingerprint, last_page_url: result.page.page_url, seen_fingerprints: [...run.seen_fingerprints, result.page.fingerprint], phase: "navigate" }, "saved", `Сохранена страница ${run.completed_pages + 1}: ${result.products.length} товаров. В задании: ${keys.length}. В общей памяти: ${merged.products.length}.`);
+    if (!partial) next = logEntry({ ...next, completed_pages: run.completed_pages + 1, previous_fingerprint: result.page.fingerprint, previous_card_count: observedCount, previous_signature: result.page.diagnostics?.content_signature, previous_page_context: result.page.diagnostics?.page_context, previous_document_id: result.page.diagnostics?.document_id, last_page_url: result.page.page_url, seen_fingerprints: [...run.seen_fingerprints, result.page.fingerprint], phase: "navigate", allow_repeats: false }, "saved", `Сохранена страница ${run.completed_pages + 1}: ${result.products.length} карточек. В задании: ${merged.products.filter(item => item.task_id === id || item.task_ids?.includes(id)).length}. В общей памяти: ${merged.products.length}. Повторы сохранены.`);
     await persistState({ collection: merged, run: next }, result, partial);
     return { run: next, count: merged.products.length };
   });
@@ -228,7 +253,7 @@ async function detailStep(run) {
     const { collection: latest = emptyCollection() } = await chrome.storage.local.get("collection");
     const matched = result.products.filter(product => productKey(product) === key).map(product => ({ ...product, task_ids: [run.id] }));
     if (!matched.length && String(item.source).startsWith("web:") && result.products.length === 1) matched.push({ ...result.products[0], canonical_detail_url: result.products[0].product_url, source: item.source, product_id: item.product_id, product_url: item.product_url, task_ids: [run.id] });
-    let products = S.mergeProducts(latest.products, matched);
+    let products = mergeResult(latest, { products: matched }, true).products;
     const found = products.find(product => productKey(product) === key);
     if (found && (found.shop_name || found.supplier_url)) products = products.map(product => {
       const related = product.source === item.source && ((item.supplier_id && product.supplier_id === item.supplier_id) || (item.supplier_url && product.supplier_url === item.supplier_url));
@@ -246,8 +271,17 @@ async function pauseAccess(id, error, tabId) {
   await updateRun(id, current => ({ ...current, required_origin: error.required_origin, ...(current.phase !== "details" && tabId != null ? { tab_id: tabId, phase: "search", pending_navigation: null } : {}) }));
   await finish(id, "paused", error.message, "permission");
 }
+function changedPage(run, url, peek, append = false, clicked = false) {
+  const previous = new Set((run.previous_fingerprint || "").split(","));
+  const fresh = peek.products.some(item => !previous.has(productKey(item)));
+  const proof = S.pageChangeConfirmed(url, peek.diagnostics, run.last_page_url, run.previous_page_context, run.previous_document_id);
+  const context = peek.diagnostics?.page_context || {};
+  const changedContent = clicked && run.previous_signature && peek.diagnostics?.content_signature !== run.previous_signature && !context.mismatch && !context.mixed;
+  const repeatedPage = !fresh && (proof || changedContent);
+  const grown = append && peek.products.length > (run.previous_card_count || previous.size);
+  return { changed: fresh || repeatedPage || grown, allow_repeats: repeatedPage || grown };
+}
 async function awaitNavigation(run) {
-  const previous = new Set(run.previous_fingerprint.split(","));
   const deadline = Date.now() + 18000;
   while (Date.now() < deadline) {
     const current = await activeRun(run.id); if (!current) return;
@@ -260,7 +294,8 @@ async function awaitNavigation(run) {
       if (!await hasAccess(tab.url)) { inaccessible.push(tab); continue; }
       try {
         const peek = await sendToTab(tabId, "PEEK", { query: current.query, profile: await siteProfile(tab.url) });
-        if (peek.products.some(item => !previous.has(productKey(item)))) matches.push(tab);
+        const change = changedPage(current, tab.url, peek, pending.candidate.kind === "load-more", true);
+        if (change.changed) matches.push({ ...tab, allow_repeats: change.allow_repeats });
       } catch (error) {
         if (["CHALLENGE", "RATE_LIMIT"].includes(error.code)) {
           await updateRun(run.id, task => ({ ...task, tab_id: tabId, phase: "search", pending_navigation: null, challenge_navigation: { source_url: pending.source_url, source_tab_id: pending.source_tab_id, target_tab_id: tabId } })); throw error;
@@ -270,7 +305,7 @@ async function awaitNavigation(run) {
     if (matches.length === 1 && !inaccessible.length && (pending.exact_tab_id != null || Date.now() - pending.started_at >= 800)) {
       const target = matches[0];
       const append = pending.candidate.kind === "load-more" && S.canonicalUrl(target.url) === S.canonicalUrl(pending.source_url);
-      await updateRun(run.id, task => logEntry({ ...task, tab_id: target.id, phase: "search", collection_mode: append ? "append" : "replace", pending_navigation: null, navigation: null }, "loading", target.id !== pending.source_tab_id ? "Следующая выдача открылась в новой вкладке. Переключаю сбор на неё." : "Переход подтверждён: появились новые товары.")); return;
+      await updateRun(run.id, task => logEntry({ ...task, tab_id: target.id, phase: "search", allow_repeats: target.allow_repeats, collection_mode: append ? "append" : "replace", pending_navigation: null, navigation: null }, "loading", target.id !== pending.source_tab_id ? "Следующая выдача открылась в новой вкладке. Переключаю сбор на неё." : "Переход подтверждён. Сохраняю все карточки, включая повторы.")); return;
     }
     if (matches.length > 1 || inaccessible.length && targetIds.length > 1 && pending.exact_tab_id == null) {
       await updateRun(run.id, task => ({ ...task, navigation_tabs: targetIds }));
@@ -290,8 +325,8 @@ async function navigateStep(run) {
   await waitForTab(run.tab_id, run.id); await sendToTab(run.tab_id, "RESET");
   const tab = await chrome.tabs.get(run.tab_id), profile = await siteProfile(tab.url);
   const peek = await sendToTab(run.tab_id, "PEEK", { profile, query: run.query });
-  const previous = new Set(run.previous_fingerprint.split(","));
-  if (peek.products.some(item => !previous.has(productKey(item)))) { await updateRun(run.id, current => ({ ...current, phase: "search", collection_mode: S.canonicalUrl(tab.url) === S.canonicalUrl(run.last_page_url) ? current.collection_mode : "replace" })); return; }
+  const change = changedPage(run, tab.url, peek);
+  if (change.changed) { await updateRun(run.id, current => ({ ...current, phase: "search", allow_repeats: change.allow_repeats, collection_mode: S.canonicalUrl(tab.url) === S.canonicalUrl(run.last_page_url) ? current.collection_mode : "replace" })); return; }
   const navigation = await sendToTab(run.tab_id, "NAVIGATE_OPTIONS", { profile });
   const selected = run.chosen_navigation ? navigation.candidates.find(item => item.id === run.chosen_navigation) : navigation.chosen;
   await updateRun(run.id, current => ({ ...current, navigation }));
@@ -329,7 +364,7 @@ async function processRun() {
     }
     await waitForTab(run.tab_id, id);
     const tab = await chrome.tabs.get(run.tab_id);
-    const result = await sendToTab(run.tab_id, "COLLECT", { query: run.query, scroll: run.scroll, raw: run.raw, profile: await siteProfile(tab.url), previousFingerprint: run.previous_fingerprint, known_fingerprint: run.seen_fingerprints.join(","), expected_count: run.previous_fingerprint?.split(",").length || null, append_mode: run.collection_mode === "append", scroll_delay: run.interval_ms >= 5000 ? 1000 : 650 });
+    const result = await sendToTab(run.tab_id, "COLLECT", { query: run.query, scroll: run.scroll, raw: run.raw, profile: await siteProfile(tab.url), previousFingerprint: run.previous_fingerprint, previous_url: run.last_page_url, previous_page_context: run.previous_page_context, previous_document_id: run.previous_document_id, allow_repeats: run.allow_repeats === true, known_fingerprint: run.seen_fingerprints.join(","), expected_count: run.previous_card_count || run.previous_fingerprint?.split(",").length || null, append_mode: run.collection_mode === "append", scroll_delay: run.interval_ms >= 5000 ? 1000 : 650 });
     const saved = await saveSearch(id, result); if (!saved) return;
     if (saved.run.completed_pages >= saved.run.max_pages) await beginDetails(id);
   } catch (error) {
@@ -403,8 +438,8 @@ async function resumeRun(options = {}) {
       const tab = await chrome.tabs.get(tabId); await sendToTab(tabId, "RESET"); await sendToTab(tabId, "CHECK");
       if (run.challenge_navigation && options.tab_id == null && run.phase !== "details") {
         const peek = await sendToTab(tabId, "PEEK", { profile: await siteProfile(tab.url), query: run.query });
-        const previous = new Set((run.previous_fingerprint || "").split(","));
-        const changed = peek.products.some(item => !previous.has(productKey(item)));
+        const change = changedPage(run, tab.url, peek, false, true); const changed = change.changed;
+        run.allow_repeats = change.allow_repeats;
         const recovery = run.challenge_navigation;
         run.phase = !changed && tabId === recovery.source_tab_id && S.canonicalUrl(tab.url) === S.canonicalUrl(recovery.source_url) ? "navigate" : "search";
         run.pending_navigation = null; run.challenge_navigation = null;
@@ -448,7 +483,7 @@ async function exportSnapshot(taskId = null, raw = false) {
   }
   if (!collection.products.length && !history.length) throw new Error("Сначала запустите задание или импортируйте товары.");
   const groups = S.supplierGroups(collection.products);
-  return { schema_version: 3, sources: [...new Set(collection.products.map(item => item.source))], exported_at: new Date().toISOString(), total_products: collection.products.length, total_suppliers: groups.suppliers.length,
+  return { schema_version: 3, collection_mode: "all_cards", sources: [...new Set(collection.products.map(item => item.source))], exported_at: new Date().toISOString(), total_products: collection.products.length, total_suppliers: groups.suppliers.length,
     tasks: history, total_tasks: history.length, pages: collection.pages, suppliers: groups.suppliers, unresolved_products: groups.unresolved, products: collection.products,
     ...(raw ? { raw_cards: collection.raw_cards || [] } : {}) };
 }
@@ -466,21 +501,27 @@ async function importCollection(input) {
     if (processing || starting || run?.status === "running") throw new Error("Приостановите работу перед импортом.");
     const imported = S.importProducts(input);
     const independent = unassigned_memory || unassignedMemory(collection, storedTasks(tasks, run, collection));
-    const independentRaw = new Map(independent.raw_cards.map(card => [`${card.source}:${card.product_id}:${card.source_page_url}`, card]));
-    const products = S.mergeProducts(collection.products, imported);
-    const raw = new Map((collection.raw_cards || []).map(card => [`${card.source}:${card.product_id}:${card.source_page_url}:${card.task_id || "legacy"}`, card]));
+    const independentRaw = new Map(independent.raw_cards.map(card => [card.observation_id || `${card.source}:${card.product_id}:${card.source_page_url}`, card]));
+    const batch = crypto.randomUUID();
+    const rows = imported.map((item, index) => ({ ...item, observation_id: crypto.randomUUID(), imported_observation_id: item.observation_id || null, imported_task_id: item.task_id || null, import_batch_id: batch, task_id: null, task_ids: [], checkpoint_id: null, capture_status: "imported", card_index: index + 1 }));
+    const products = [...collection.products, ...rows];
+    const raw = new Map((collection.raw_cards || []).map(card => [card.observation_id || `${card.source}:${card.product_id}:${card.source_page_url}:${card.task_id || "legacy"}`, card]));
     const keys = new Set(imported.map(productKey));
+    const usedRawRows = new Set();
     if (Array.isArray(input.raw_cards) && input.raw_cards.length <= 10000) for (const card of input.raw_cards) {
       const source = card?.source || S.site(card?.source_page_url);
       if (source && keys.has(`${source}:${card.product_id}`) && typeof card.html === "string" && card.html.length <= 20000) {
-        const safe = { source, product_id: String(card.product_id), source_page_url: card.source_page_url, html: card.html, collected_at: new Date().toISOString() };
+        const key = `${source}:${card.product_id}`;
+        const row = rows.find(item => !usedRawRows.has(item.observation_id) && item.imported_observation_id && item.imported_observation_id === card.observation_id) || rows.find(item => !usedRawRows.has(item.observation_id) && productKey(item) === key);
+        if (row) usedRawRows.add(row.observation_id);
+        const safe = { observation_id: row?.observation_id || crypto.randomUUID(), import_batch_id: batch, source, product_id: String(card.product_id), source_page_url: card.source_page_url, html: card.html, collected_at: new Date().toISOString() };
         if (!S.webUrl(safe.source_page_url)) continue;
-        if (card.record) try { const parsed = S.importProducts({ products: [card.record] })[0]; if (productKey(parsed) === `${source}:${safe.product_id}`) safe.record = parsed; } catch { /* preserve inert markup, discard malformed business record */ }
-        raw.set(`${safe.source}:${safe.product_id}:${safe.source_page_url}:legacy`, safe);
-        independentRaw.set(`${safe.source}:${safe.product_id}:${safe.source_page_url}`, safe);
+        if (card.record) try { const parsed = S.importProducts({ products: [card.record] })[0]; if (productKey(parsed) === `${source}:${safe.product_id}`) safe.record = { ...parsed, observation_id: safe.observation_id, task_id: null, task_ids: [], checkpoint_id: null, capture_status: "imported" }; } catch { /* preserve inert markup, discard malformed business record */ }
+        raw.set(safe.observation_id, safe);
+        independentRaw.set(safe.observation_id, safe);
       }
     }
-    await chrome.storage.local.set({ collection: { ...collection, products, raw_cards: [...raw.values()] }, unassigned_memory: { ...independent, products: S.mergeProducts(independent.products, imported), raw_cards: [...independentRaw.values()] } });
+    await chrome.storage.local.set({ collection: { ...collection, products, raw_cards: [...raw.values()] }, unassigned_memory: { ...independent, products: [...independent.products, ...rows], raw_cards: [...independentRaw.values()] } });
     return { imported: imported.length, total: products.length };
   });
 }

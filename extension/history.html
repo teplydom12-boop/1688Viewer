@@ -2,13 +2,13 @@
 <html lang="ru">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Supplier Viewer — история проверок</title><link rel="stylesheet" href="dashboard.css"><link rel="stylesheet" href="history.css"></head>
 <body>
-  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>История проверок</small></div></div><a href="dashboard.html" class="local">Сбор и общая память</a><span class="version">0.8</span></header>
+  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>История проверок</small></div></div><a href="dashboard.html" class="local">Сбор и общая память</a><span class="version">0.9</span></header>
   <main class="history-workspace">
     <div class="page-heading"><div><h1>История проверок</h1><p class="muted">Откройте сохранённую память любого задания. Результаты остаются здесь после закрытия браузера.</p></div><div class="exports"><button id="refresh">Обновить</button><button id="export-all-json">Вся память: JSON</button><button id="export-all-xlsx">Вся память: Excel</button><button id="clear-all" class="danger">Удалить всю память</button></div></div>
     <p id="error" class="error" role="alert" hidden></p><p id="notice" role="status" aria-live="polite"></p>
     <p id="running-note" class="warnings" hidden>Проверка выполняется. Для удаления памяти поставьте её на паузу в окне сбора и дождитесь остановки.</p>
     <div class="filter-row"><input id="history-filter" type="search" placeholder="Найти проверку по названию или площадке" aria-label="Поиск по истории проверок"><span id="history-count" class="muted"></span></div>
-    <div class="table-wrap"><table class="supplier-table"><thead><tr><th>Проверка / начало</th><th>Площадка</th><th>Состояние</th><th>Страницы</th><th>Товаров</th><th>Память проверки</th></tr></thead><tbody id="history-tasks"></tbody></table><p id="history-empty" class="empty">Проверок пока нет. Запустите задание в окне сбора.</p></div>
+    <div class="table-wrap"><table class="supplier-table"><thead><tr><th>Проверка / начало</th><th>Площадка</th><th>Состояние</th><th>Страницы</th><th>Карточек</th><th>Память проверки</th></tr></thead><tbody id="history-tasks"></tbody></table><p id="history-empty" class="empty">Проверок пока нет. Запустите задание в окне сбора.</p></div>
     <section id="task-memory" hidden aria-labelledby="memory-title">
       <div class="page-heading"><div><h2 id="memory-title"></h2><p id="memory-meta" class="muted"></p></div><div class="exports"><button id="toggle-images" aria-pressed="false" aria-controls="memory-products">Показать картинки</button><button id="export-task-json">JSON этой проверки</button><button id="export-task-xlsx">Excel этой проверки</button><button id="export-task-raw">Исходники этой проверки</button><button id="delete-task" class="danger">Удалить память этой проверки</button></div></div>
       <p id="memory-status"></p><progress id="memory-progress" max="100" value="0" aria-label="Прогресс выбранной проверки"></progress><p id="memory-counts" class="muted"></p>

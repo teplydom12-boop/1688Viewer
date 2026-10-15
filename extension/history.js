@@ -18,7 +18,7 @@ function renderList() {
   if (!state) return;
   const filter = $("history-filter").value.trim().toLowerCase();
   const tasks = state.tasks.filter(task => [task.query, task.source, labels[task.status], date(task.started_at)].some(value => String(value || "").toLowerCase().includes(filter)));
-  $("history-count").textContent = `Проверок: ${tasks.length} из ${state.task_count} · Товаров в общей памяти: ${state.count}`;
+  $("history-count").textContent = `Проверок: ${tasks.length} из ${state.task_count} · Карточек в общей памяти: ${state.count}`;
   $("history-empty").hidden = Boolean(tasks.length);
   $("history-empty").textContent = state.task_count ? "Проверки по этому запросу не найдены." : "Проверок пока нет. Запустите задание в окне сбора.";
   $("history-tasks").replaceChildren(...tasks.map(task => {
@@ -42,7 +42,7 @@ function renderMemory() {
   $("memory-meta").textContent = `${selected.source || "Проверка карточек"} · Начало: ${date(selected.started_at)} · ${labels[selected.status] || selected.status} · ID: ${selected.id}`;
   $("memory-status").textContent = selected.message || "";
   $("memory-progress").value = selected.status === "finished" ? 100 : selected.phase === "details" ? 100 * selected.detail_index / Math.max(1, selected.detail_total) : 100 * selected.completed_pages / Math.max(1, selected.max_pages);
-  $("memory-counts").textContent = `Товаров: ${selected.products.length} · Страниц: ${selected.completed_pages}/${selected.max_pages} · Исходных карточек: ${selected.raw_count || 0}`;
+  $("memory-counts").textContent = `Карточек (с повторами): ${selected.products.length} · Страниц: ${selected.completed_pages}/${selected.max_pages} · Исходных карточек: ${selected.raw_count || 0}`;
   $("memory-empty").hidden = Boolean(selected.products.length);
   $("delete-task").disabled = state.run?.status === "running";
   const showImages = state.view_preferences?.history_images === true;
@@ -50,11 +50,11 @@ function renderMemory() {
   $("toggle-images").setAttribute("aria-pressed", String(showImages));
   const thumbnails = new Map([...$("memory-products").querySelectorAll("[data-image-key]")].map(node => [node.dataset.imageKey, node]));
   $("memory-products").replaceChildren(...selected.products.map(product => {
-    const row = element("tr"), name = element("td"); name.append(link(product.product_url, product.title || "Название не получено"), element("small", `ID: ${product.product_id}`, "supplier-id"));
+    const row = element("tr"), name = element("td"); name.append(link(product.product_url, product.title || "Название не получено"), element("small", `ID: ${product.product_id}${product.page_index ? ` · Страница ${product.page_index}` : ""}${product.card_index ? ` · Позиция ${product.card_index}` : ""}`, "supplier-id"));
     const supplier = element("td"); supplier.append(link(product.supplier_url, product.shop_name || "Имя магазина не получено"), element("small", product.supplier_id || "", "supplier-id"));
     const image = element("td");
     if (showImages && SupplierCollector.webUrl(product.image_url)) {
-      const key = `${product.source}:${product.product_id}:${product.image_url}`;
+      const key = `${product.observation_id || product.product_id}:${product.image_url}`;
       let thumbnail = thumbnails.get(key);
       if (!thumbnail) {
         thumbnail = link(product.image_url, ""); thumbnail.dataset.imageKey = key;

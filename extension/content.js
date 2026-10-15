@@ -10,6 +10,7 @@
   let cancelled = false;
   let pageData = { products: [], pagination: [] }, dataReadAt = 0;
   let knownFingerprint = "";
+  const documentId = crypto.randomUUID();
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   function visible(element) {
@@ -47,7 +48,8 @@
   function extract(label, mode = "search", raw = true) {
     check();
     if (mode === "search" && S.productUrl(location.href, location.href)) throw new Error("Откройте страницу поисковой выдачи, а не карточку товара.");
-    return E.extract(document, { url: location.href, label, mode, raw, profile, pageData, known_fingerprint: knownFingerprint });
+    const result = E.extract(document, { url: location.href, label, mode, raw, profile, pageData, known_fingerprint: knownFingerprint });
+    return { ...result, products: mode === "search" ? result.cards : result.products, diagnostics: { ...result.diagnostics, document_id: documentId, content_signature: S.cardSignature(result.cards) } };
   }
   async function refreshPageData(force = false) {
     check();
@@ -61,7 +63,7 @@
 
   function quality(result, options, initial = false) {
     const terminal = N.analyze(document, { url: location.href, profile: profile.navigation, pagination: result.diagnostics.pagination || [] }).decision === "exhausted";
-    return S.collectionQuality(result.products, { known_keys: (options.known_fingerprint || "").split(",").filter(Boolean), expected_count: result.diagnostics.expected_page_size || options.expected_count, check_count: options.scroll === true, initial, terminal, page_context: result.diagnostics.page_context, append_mode: options.append_mode === true });
+    return S.collectionQuality(result.products, { known_keys: (options.known_fingerprint || "").split(",").filter(Boolean), expected_count: result.diagnostics.expected_page_size || options.expected_count, check_count: options.scroll === true, initial, terminal, page_context: result.diagnostics.page_context, append_mode: options.append_mode === true, allow_repeats: options.allow_repeats === true });
   }
   function incomplete(result, coverage) {
     const error = new Error(`Полнота страницы не подтверждена: найдено ${coverage.observed_count} товаров, новых ${coverage.new_count}, повторных ${coverage.repeated_count}${coverage.expected_count ? `; ориентир ${coverage.expected_count}` : ""}${coverage.reason === "page-mismatch" ? `; адрес страницы ${coverage.url_page ?? "не указан"}, загружена выдача ${coverage.rendered_page ?? "смешанных страниц"}` : ""}. Дождитесь загрузки выдачи и нажмите «Продолжить». Страница не засчитана.`);
@@ -77,7 +79,7 @@
       if (result.products.length) {
         const coverage = quality(result, options, true);
         if (!coverage.complete) pending = { result, coverage };
-        else if (!previousFingerprint || result.products.some(item => !previousIds.has(`${item.source}:${item.product_id}`) && !previousIds.has(item.product_id))) return result;
+        else if (!previousFingerprint || options.allow_repeats || S.pageChangeConfirmed(location.href, result.diagnostics, options.previous_url, options.previous_page_context, options.previous_document_id) || result.products.some(item => !previousIds.has(`${item.source}:${item.product_id}`) && !previousIds.has(item.product_id))) return result;
       }
       await delay(400);
     }
@@ -92,6 +94,7 @@
     if (products.some(item => !item.product_url)) warnings.push("У части товаров нет доступной ссылки на карточку; автоматическая проверка таких товаров пропускается.");
     if (diagnostics.data_truncated) warnings.push("Данные приложения превысили лимит анализа. Часть результатов могла быть пропущена.");
     if (diagnostics.price_conflicts) warnings.push(`У ${diagnostics.price_conflicts} товаров источники показывают разные цены. Сравните значения со страницей.`);
+    products = products.map((item, index) => ({ ...item, card_index: index + 1 }));
     return { products, raw_cards: [...rawCards.values()], page: {
       page_url: location.href, ...S.detectSearch(location.href, query, document.querySelector('input[name="keywords"], input[name="SearchText"], input[type="search"], [role="searchbox"]')?.value),
       source: S.site(location.href), collected_at: new Date().toISOString(), product_count: products.length,
@@ -108,8 +111,8 @@
     const rawCards = new Map();
     let diagnostics = {};
     const absorb = result => {
-      products = S.mergeProducts(products, result.products); diagnostics = result.diagnostics;
-      for (const card of result.raw_cards) rawCards.set(`${card.source}:${card.product_id}`, card);
+      products = S.mergeCardSamples(products, result.products); diagnostics = result.diagnostics;
+      for (const card of result.raw_cards) rawCards.set(card.page_card_key, card);
     };
     let accepting = false;
     const watcher = SupplierObserver.watch(document, () => { if (accepting) absorb(extract(options.query, "search", options.raw !== false)); }, check);
@@ -148,10 +151,9 @@
       return pageResult(products, rawCards, { ...diagnostics, ...watcher.stats(), collection_quality: coverage }, options.query, warnings);
     } catch (error) {
       if (error.code === "INCOMPLETE_RESULTS") {
-        const known = new Set(knownFingerprint.split(","));
         const candidate = error.candidate;
-        products = error.coverage.reason === "page-mismatch" ? [] : candidate.products.filter(item => !known.has(`${item.source}:${item.product_id}`)); rawCards.clear();
-        for (const card of candidate.raw_cards || []) if (error.coverage.reason !== "page-mismatch" && !known.has(`${card.source}:${card.product_id}`)) rawCards.set(`${card.source}:${card.product_id}`, card);
+        products = candidate.products; rawCards.clear();
+        for (const card of candidate.raw_cards || []) rawCards.set(card.page_card_key, card);
         diagnostics = { ...candidate.diagnostics, collection_quality: error.coverage };
         error.partial = pageResult(products, rawCards, diagnostics, options.query, [error.message]);
       } else if (products.length) error.partial = pageResult(products, rawCards, diagnostics, options.query, ["Страница собрана частично: работа была прервана."]);

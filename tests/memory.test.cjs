@@ -28,7 +28,8 @@ async function ui(h, filename) {
     return route.fulfill({ body: fs.readFileSync(path.join(__dirname, "../extension", file)), contentType: file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html; charset=utf-8" });
   });
   await page.goto(`https://collector.test/${filename}.html`);
-  await page.waitForFunction(() => document.getElementById("count").textContent === "2");
+  const state = (await h.command("STATE")).result, count = filename === "popup" ? state.current_task?.product_count ?? state.count : state.count;
+  await page.waitForFunction(count => document.getElementById("count").textContent === String(count), count);
   return page;
 }
 
@@ -42,10 +43,11 @@ test("multiple searches preserve independent snapshots, cumulative memory and ta
     node.querySelector("a").textContent = "Другой термос";
   });
   const second = await collect(h, "Термосы");
-  assert.equal(h.data.tasks.length, 2); assert.equal(h.data.collection.products.length, 3);
+  assert.equal(h.data.tasks.length, 2); assert.equal(h.data.collection.products.length, 4);
   assert.deepEqual(h.data.tasks[0], snapshot);
   assert.equal(h.data.tasks[1].products.find(p => p.product_id === "1001").price, "¥99.00");
-  assert.deepEqual(h.data.collection.products[0].task_ids, [first, second]);
+  assert.deepEqual(h.data.collection.products[0].task_ids, [first]);
+  assert.equal(h.data.collection.products.filter(item => item.product_id === "1001").length, 2);
   assert.deepEqual(h.data.collection.products.find(p => p.product_id === "1002").task_ids, [first]);
   assert.deepEqual(h.data.collection.products.find(p => p.product_id === "1003").task_ids, [second]);
   assert.equal(h.data.collection.pages.length, 2);
@@ -58,7 +60,7 @@ test("multiple searches preserve independent snapshots, cumulative memory and ta
   assert.equal((await h.command("TASK", { id: first })).result.products[0].price, "¥12.50");
   assert.equal((await h.command("EXPORT")).ok, true);
   const output = exported(h);
-  assert.equal(output.total_tasks, 2); assert.equal(output.total_products, 3);
+  assert.equal(output.total_tasks, 2); assert.equal(output.total_products, 4);
   assert.deepEqual(output.tasks.map(task => task.query), ["Чашки", "Термосы"]);
   assert.equal(output.tasks[0].products[0].price, "¥12.50");
   assert.ok(output.tasks.every(task => task.finished_at && task.completed_pages === 1));
@@ -129,7 +131,7 @@ ns={'x':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 book=ET.fromstring(z.read('xl/workbook.xml'))
 assert [s.attrib['name'] for s in book.find('x:sheets',ns)] == ['Товары','Поставщики','Задания','Товары заданий']
 sheets=[ET.fromstring(z.read('xl/worksheets/sheet%d.xml'%i)) for i in range(1,5)]
-assert [len(s.find('x:sheetData',ns)) for s in sheets] == [3,2,3,5]
+assert [len(s.find('x:sheetData',ns)) for s in sheets] == [5,2,3,5]
 for s in sheets: assert not s.findall('.//x:f',ns)
 cells=sheets[0].findall('.//x:row',ns)[1].findall('x:c',ns)
 assert cells[1].attrib['t']=='inlineStr'

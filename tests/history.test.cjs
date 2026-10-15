@@ -48,8 +48,9 @@ test("deleting an older check keeps the current check and never copies removed f
   const third = await collect(h, "Без имени магазина");
   assert.equal((await h.command("DELETE_TASK", { id: first })).ok, true);
   assert.equal(h.data.run.id, third); assert.equal(h.data.run.status, "finished");
-  assert.deepEqual(h.data.collection.products.map(item => item.product_id).sort(), ["1001", "1003"]);
-  assert.deepEqual(h.data.collection.products[0].task_ids, [second, third]);
+  assert.deepEqual(h.data.collection.products.map(item => item.product_id).sort(), ["1001", "1001", "1003", "1003"]);
+  assert.deepEqual(h.data.collection.products[0].task_ids, [second]);
+  assert.equal(h.data.collection.products.filter(item => item.task_id === third && item.product_id === "1001")[0].shop_name, null);
   await h.command("DELETE_TASK", { id: second });
   assert.equal(h.data.collection.products[0].shop_name, null, "a name known only from deleted checks must disappear");
   assert.equal(h.data.collection.products[0].price, "¥99.00");

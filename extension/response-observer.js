@@ -12,12 +12,17 @@
     if (!state.enabled) return;
     if (payload?.captcha_required === true || payload?.isCaptcha === true || [].concat(payload?.ret || payload?.code || []).some(value => /FAIL_SYS_USER_VALIDATE|RGV587_ERROR|NEED_CAPTCHA|captcha_required/i.test(String(value)))) state.challenge = true;
     const result = window.SupplierPageData.readPageState({ payload, onlyPayload: true });
-    const products = new Map((result.products.length >= 2 ? [] : state.products).map(item => [item.url || item.productId, item]));
-    for (const product of result.products) products.set(product.url || product.productId, product);
-    state.products = [...products.values()].slice(-600);
+    // Repeated offers in one list are separate appearances. Re-reading that
+    // response replaces its list instead of creating another copy of every row.
+    const products = result.products.length >= 2 ? result.products : [...state.products];
+    if (result.products.length < 2) for (const product of result.products) {
+      const index = products.findIndex(item => (item.url || item.productId) === (product.url || product.productId));
+      if (index < 0) products.push(product); else products[index] = product;
+    }
+    state.products = products.slice(-600);
     // Latest response's pagination replaces older search checkpoints.
     if (result.pagination.length) state.pagination = result.pagination;
-    state.truncated ||= result.diagnostics.truncated || products.size > 600;
+    state.truncated ||= result.diagnostics.truncated || products.length > 600;
     state.responses++;
   }
   async function observe(response) {

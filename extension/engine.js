@@ -57,6 +57,8 @@
       if ((text(current) || "").length > 6000) break;
       selected = current;
       if (CARD_PATTERN.test(normalizedClass(current)) || current.hasAttribute("data-renderkey") || current.hasAttribute("data-offer-id")) return current;
+      if (["ARTICLE", "LI"].includes(current.tagName)) return current;
+      if (current.querySelector('.price,[itemprop="price"]') && [...(current.parentElement?.children || [])].some(peer => peer !== current && peer.tagName === current.tagName && peer.querySelector('.price,[itemprop="price"]') && idsIn(peer, url).size)) return current;
     }
     return selected;
   }
@@ -209,8 +211,7 @@
       }
       if (root.SupplierGeneric) candidates.push(...root.SupplierGeneric.infer(doc, { url, snapshot, profile }).candidates);
     }
-    const rawCards = new Map();
-    const records = [];
+    const records = [], entries = [];
     const currentOffer = S.productUrl(url, url, generic);
     const known = new Set((options.known_fingerprint || "").split(",").filter(Boolean));
     const domKeys = new Set(candidates.filter(candidate => candidate.anchor).map(candidate => `${candidate.offer.url ? S.site(candidate.offer.url) : source}:${candidate.offer.id}`));
@@ -234,16 +235,8 @@
         extraction_confidence: candidate.confidence || 85, field_sources: {}, field_confidence: {}
       };
       for (const [field, value] of Object.entries(record)) if (value && ["title", "price", "minimum_order", "shop_name", "supplier_url", "supplier_id", "image_url"].includes(field)) { record.field_sources[field] = candidate.method; record.field_confidence[field] = candidate.confidence || 85; }
-      records.push(record);
-      const rawKey = `${record.source}:${record.product_id}`;
-      if (raw && card) {
-        const html = sanitizedCard(card, url);
-        const old = rawCards.get(rawKey);
-        if (html && (!old || html.length > old.html.length)) rawCards.set(rawKey, { product_id: record.product_id, source: record.source, source_page_url: url, collected_at: timestamp, html });
-        else if (!html && !old) rawCards.set(rawKey, { product_id: record.product_id, source: record.source, source_page_url: url, collected_at: timestamp, html: "", record });
-      } else if (raw && !rawCards.has(rawKey)) {
-        rawCards.set(rawKey, { product_id: record.product_id, source: record.source, source_page_url: url, collected_at: timestamp, html: "", record });
-      }
+      records.push(record); entries.push({ record, card });
+
     }
     const aliases = new Map();
     for (const record of records) if (record.product_url && record.native_id) {
@@ -251,9 +244,8 @@
     }
     for (const record of records) if (!record.product_url && record.native_id) {
       const matches = aliases.get(`${record.source}:${record.native_id}`); if (matches?.size !== 1) continue;
-      const found = [...matches.values()][0], originalKey = `${record.source}:${record.product_id}`;
+      const found = [...matches.values()][0];
       record.product_id = found.product_id; record.product_url = found.product_url; record.identity_type = found.identity_type;
-      const raw = rawCards.get(originalKey); if (raw) { rawCards.delete(originalKey); const key = `${record.source}:${record.product_id}`, existing = rawCards.get(key); rawCards.set(key, { ...(existing || raw), product_id: record.product_id, record }); }
     }
     const products = S.mergeProducts([], records);
     const conflicting = [];
@@ -266,8 +258,57 @@
         conflicting.push(product.product_id);
       }
     }
-    return { products, raw_cards: [...rawCards.values()], diagnostics: {
-      engine_version: "0.7.0", source, methods: [...new Set(candidates.map(item => item.method))], expected_page_size: expectedPageSize(doc, url), page_context: mode === "search" ? pageContext(doc, url) : null,
+    // Sources describing the same DOM card supply fields to one appearance.
+    // Equal IDs in disjoint DOM cards remain separate, including different prices.
+    const domGroups = new Map(), dataGroups = new Map();
+    for (const entry of entries) {
+      const key = `${entry.record.source}:${entry.record.product_id}`;
+      if (entry.card) {
+        if (!domGroups.has(entry.card)) domGroups.set(entry.card, new Map());
+        const group = domGroups.get(entry.card);
+        if (!group.has(key)) group.set(key, []); group.get(key).push(entry.record);
+      } else {
+        if (!dataGroups.has(key)) dataGroups.set(key, new Map());
+        const methods = dataGroups.get(key), method = Object.values(entry.record.field_sources)[0] || "data";
+        if (!methods.has(method)) methods.set(method, []); methods.get(method).push(entry.record);
+      }
+    }
+    const occurrences = [];
+    for (const [node, group] of domGroups) for (const [key, values] of group) {
+      const supplements = [...(dataGroups.get(key)?.values() || [])].flat();
+      const merged = S.mergeProducts([], [...supplements, ...values])[0];
+      // A value actually shown on this card takes precedence over a different
+      // appearance of the same offer in JSON or another card.
+      const shown = S.mergeProducts([], values)[0];
+      for (const field of ["title", "price", "minimum_order", "shop_name", "supplier_url", "supplier_id", "image_url"]) {
+        if (shown[field] != null) { merged[field] = shown[field]; merged.field_sources[field] = shown.field_sources[field]; merged.field_confidence[field] = shown.field_confidence[field]; }
+      }
+      occurrences.push({ record: merged, node });
+    }
+    for (const [key, methods] of dataGroups) {
+      // Use one representation rather than multiplying a list by the number of
+      // readers (JSON-LD, hydration and page state can describe the same list).
+      const primary = [...methods.values()].reverse().sort((a, b) => b.length - a.length || (b[0]?.extraction_confidence || 0) - (a[0]?.extraction_confidence || 0))[0];
+      const remaining = [...primary];
+      for (const visible of occurrences.filter(item => item.node && `${item.record.source}:${item.record.product_id}` === key)) {
+        const amount = value => String(value || "").replace(/[^\d.,-]/g, "");
+        const match = remaining.findIndex(item => visible.record.price && amount(item.price) === amount(visible.record.price));
+        if (remaining.length) remaining.splice(match < 0 ? 0 : match, 1);
+      }
+      for (const record of remaining) occurrences.push({ record: { ...record }, node: null });
+    }
+    const ranks = new Map(), cards = [], occurrenceRaw = [];
+    for (const { record, node } of occurrences) {
+      const key = `${record.source}:${record.product_id}`;
+      const position = node && ["aria-posinset", "data-index", "data-item-index", "data-renderkey"].map(attr => node.getAttribute(attr)).find(Boolean);
+      const slot = `${key}:${position ? `position:${position}` : "occurrence"}`, rank = (ranks.get(slot) || 0) + 1; ranks.set(slot, rank);
+      const pageCardKey = `${slot}:${rank}`;
+      const item = { ...record, page_card_key: pageCardKey, card_index: cards.length + 1 };
+      cards.push(item);
+      if (raw) occurrenceRaw.push({ product_id: item.product_id, source: item.source, page_card_key: pageCardKey, source_page_url: url, collected_at: timestamp, html: node ? sanitizedCard(node, url) || "" : "", record: item });
+    }
+    return { products, cards, raw_cards: occurrenceRaw, diagnostics: {
+      engine_version: "0.9.0", source, methods: [...new Set(candidates.map(item => item.method))], expected_page_size: expectedPageSize(doc, url), page_context: mode === "search" ? pageContext(doc, url) : null,
       data_truncated: Boolean(additions.truncated), pagination: additions.pagination,
       price_conflicts: conflicting.length,
       inferred_cards: products.filter(item => item.extraction_confidence < 90).length, no_detail_links: products.filter(item => !item.product_url).length,
@@ -307,11 +348,12 @@
   }
 
   function reparse(cards) {
-    let products = [];
+    const products = [];
     for (const card of cards) {
       if (!S.webUrl(card.source_page_url) || typeof card.html !== "string" || card.html.length > 20000) continue;
-      if (card.html) products = S.mergeProducts(products, fromHTML(card.html, { url: card.source_page_url, raw: false, profile: { card_selector: "body > *" } }).products);
-      if (card.record) try { products = S.mergeProducts(products, S.importProducts({ products: [card.record] }).filter(item => item.product_id === card.product_id && item.source === card.source)); } catch { /* malformed imported business record */ }
+      let appearance = card.html ? fromHTML(card.html, { url: card.source_page_url, raw: false, profile: { card_selector: "body > *" } }).products : [];
+      if (card.record) try { appearance = S.mergeProducts(appearance, S.importProducts({ products: [card.record] }).filter(item => item.product_id === card.product_id && item.source === card.source)); } catch { /* malformed imported business record */ }
+      for (const item of appearance) products.push({ ...item, ...Object.fromEntries(["observation_id", "page_card_key", "task_id", "checkpoint_id", "page_index", "card_index", "capture_status"].filter(field => card[field] != null).map(field => [field, card[field]])) });
     }
     return products;
   }

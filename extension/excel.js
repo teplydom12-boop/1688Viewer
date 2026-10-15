@@ -67,7 +67,8 @@
       ["supplier_id", "ID поставщика"], ["shop_name", "Магазин"], ["supplier_url", "Ссылка на поставщика"],
       ["price", "Цена"], ["minimum_order", "Минимальный заказ"], ["image_url", "Изображение"],
       ["query", "Запрос"], ["search_type", "Тип поиска"], ["collected_at", "Первый сбор (UTC)"], ["last_seen_at", "Последний сбор (UTC)"],
-      ["source_page_url", "Страница выдачи"], ["task_ids", "ID заданий"], ["source_origin", "Адрес сайта-источника"]
+      ["source_page_url", "Страница выдачи"], ["task_ids", "ID заданий"], ["source_origin", "Адрес сайта-источника"],
+      ["observation_id", "ID записи"], ["task_id", "ID задания"], ["page_index", "Страница задания"], ["card_index", "Позиция карточки"], ["capture_status", "Статус записи"]
     ];
     const value = (item, key) => key === "source_site" ? sourceSite(item) : key === "source_origin" ? sourceOrigin(item) : item[key];
     const tasks = output.tasks || [], thumbnails = options.thumbnails instanceof Map ? options.thumbnails : new Map();

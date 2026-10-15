@@ -165,18 +165,40 @@
   function fingerprint(products) {
     return [...new Set(products.map(item => `${item.source}:${item.product_id}`))].sort().join(",");
   }
+  function cardSignature(products) {
+    return `${products.length}:${digest(JSON.stringify(products.map(item => [item.source, item.product_id, item.page_card_key, item.title, item.price, item.minimum_order, item.shop_name, item.supplier_url, item.image_url])))}`;
+  }
+  // Repeated DOM reads update a slot; equal product IDs in different slots stay
+  // separate. This is sampling bookkeeping, not product deduplication.
+  function mergeCardSamples(existing, incoming) {
+    const slots = new Map(existing.map(item => [item.page_card_key, item]));
+    for (const item of incoming) {
+      const old = slots.get(item.page_card_key);
+      slots.set(item.page_card_key, old ? mergeProducts([old], [item])[0] : item);
+    }
+    return [...slots.values()];
+  }
+  function pageChangeConfirmed(url, diagnostics, previousUrl, previousContext, previousDocument) {
+    const context = diagnostics?.page_context || {};
+    if (context.mismatch || context.mixed) return false;
+    let before = previousContext?.rendered_page ?? previousContext?.url_page;
+    if (before == null && previousUrl) for (const [key, value] of new URL(previousUrl).searchParams) if (/^(?:beginPage|page|pageNo|pageNum|currentPage)$/i.test(key) && /^\d+$/.test(value)) { before = Number(value); break; }
+    if (before != null && context.rendered_page != null && context.rendered_page > before) return true;
+    return Boolean(previousDocument && diagnostics?.document_id && previousDocument !== diagnostics.document_id && previousUrl && canonicalUrl(url) !== canonicalUrl(previousUrl));
+  }
   function collectionQuality(products, options = {}) {
     const known = new Set(options.known_keys || []);
     const observed = new Set(products.map(item => `${item.source}:${item.product_id}`));
     const fresh = [...observed].filter(key => !known.has(key)).length;
     const expected = Math.max(0, Number(options.expected_count) || 0);
     const repeated = observed.size - fresh;
-    const stale = !options.append_mode && known.size >= 12 && observed.size >= 12 && repeated / observed.size >= 0.9 && fresh <= Math.max(1, Math.floor(observed.size * 0.1));
-    const minimum = options.initial ? Math.min(12, Math.ceil(expected * 0.2)) : Math.ceil(expected * 0.9);
-    const short = options.check_count && !options.terminal && expected >= 12 && observed.size < minimum;
     const context = options.page_context || {};
+    const verifiedPage = context.rendered_page != null && !context.mismatch && !context.mixed && (context.url_page == null || context.url_page === context.rendered_page);
+    const stale = !options.allow_repeats && !verifiedPage && !options.append_mode && known.size >= 12 && observed.size >= 12 && repeated / observed.size >= 0.9 && fresh <= Math.max(1, Math.floor(observed.size * 0.1));
+    const minimum = options.initial ? Math.min(12, Math.ceil(expected * 0.2)) : Math.ceil(expected * 0.9);
+    const short = options.check_count && !options.terminal && expected >= 12 && products.length < minimum;
     const mismatched = !options.append_mode && (context.mismatch || context.mixed);
-    return { complete: !stale && !short && !mismatched, observed_count: observed.size, new_count: fresh, repeated_count: repeated, expected_count: expected || null, terminal: Boolean(options.terminal), url_page: context.url_page ?? null, rendered_page: context.rendered_page ?? null, reason: mismatched ? "page-mismatch" : stale ? "stale-results" : short ? "short-results" : null };
+    return { complete: !stale && !short && !mismatched, observed_count: products.length, unique_id_count: observed.size, new_count: fresh, repeated_count: repeated, expected_count: expected || null, terminal: Boolean(options.terminal), url_page: context.url_page ?? null, rendered_page: context.rendered_page ?? null, reason: mismatched ? "page-mismatch" : stale ? "stale-results" : short ? "short-results" : null };
   }
 
   function supplierGroups(products) {
@@ -207,7 +229,7 @@
   }
 
   function csv(products) {
-    const fields = ["source", "supplier_id", "shop_name", "supplier_url", "product_id", "title", "product_url", "price", "minimum_order", "query"];
+    const fields = ["source", "supplier_id", "shop_name", "supplier_url", "product_id", "title", "product_url", "price", "minimum_order", "query", "observation_id", "task_id", "page_index", "card_index", "source_page_url", "collected_at", "capture_status"];
     const escape = value => {
       let string = String(value ?? "");
       if (/^[\s]*[=+@-]/.test(string) || /^[\t\r]/.test(string)) string = "'" + string;
@@ -232,6 +254,8 @@
       result.source_page_url = webUrl(item.source_page_url) ? item.source_page_url : result.product_url;
       result.identity_type = text(item.identity_type) || (generic ? noLink ? "card-fingerprint" : "url" : "marketplace-id");
       result.native_id = text(item.native_id)?.slice(0, 1000) || null;
+      for (const field of ["observation_id", "page_card_key", "checkpoint_id", "task_id", "capture_status"]) if (text(item[field])) result[field] = text(item[field]).slice(0, 1000);
+      for (const field of ["page_index", "card_index"]) if (Number.isInteger(item[field]) && item[field] > 0) result[field] = item[field];
       result.extraction_confidence = Math.min(100, Math.max(0, Number(item.extraction_confidence) || 0));
       if (Array.isArray(item.data_conflicts)) result.data_conflicts = item.data_conflicts.filter(conflict => conflict?.field === "price" && Array.isArray(conflict.observations)).slice(0, 1).map(conflict => ({ field: "price", observations: conflict.observations.slice(0, 8).map(observation => ({ value: text(observation?.value)?.slice(0, 1000) || "", method: text(observation?.method)?.slice(0, 100) || "" })).filter(observation => observation.value) }));
       result.collected_at = Number.isNaN(Date.parse(item.collected_at)) ? new Date().toISOString() : item.collected_at;
@@ -248,7 +272,7 @@
     });
   }
 
-  const api = { text, quantity, marketplace, isMarketplaceUrl, webUrl, site, originPattern, digest, canonicalUrl, dangerousUrl, productUrl, supplierUrl, httpUrl, detectSearch, mergeProducts, fingerprint, collectionQuality, supplierGroups, csv, importProducts };
+  const api = { text, quantity, marketplace, isMarketplaceUrl, webUrl, site, originPattern, digest, canonicalUrl, dangerousUrl, productUrl, supplierUrl, httpUrl, detectSearch, mergeProducts, mergeCardSamples, pageChangeConfirmed, fingerprint, cardSignature, collectionQuality, supplierGroups, csv, importProducts };
   root.SupplierCollector = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(globalThis);
