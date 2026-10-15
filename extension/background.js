@@ -2,6 +2,7 @@
 importScripts("shared.js");
 importScripts("page-data.js");
 importScripts("excel.js");
+importScripts("suppliers-core.js");
 const S = globalThis.SupplierCollector;
 const ALARM = "1688-collector-progress";
 const RESPONSE_SCRIPT = "supplier-observed-responses";
@@ -378,9 +379,10 @@ async function processRun() {
   }
 }
 async function startRun(options, detailsOnly = false) {
-  if (starting || processing) throw new Error("Работа уже идёт или приостанавливается. Дождитесь остановки.");
+  if (starting || processing || SupplierStage.busy()) throw new Error("Работа уже идёт или приостанавливается. Поставьте активный этап на паузу и дождитесь остановки.");
   starting = true;
   try {
+    if (await SupplierStage.isRunning()) throw new Error("Сначала приостановите этап 2.");
     const { run: old, collection = emptyCollection() } = await chrome.storage.local.get(["run", "collection"]);
     if (old?.status === "running") throw new Error("Работа уже идёт. Сначала поставьте её на паузу.");
     let tab;
@@ -424,9 +426,10 @@ async function pauseRun(status = "paused") {
   return { paused: true, stopped: true };
 }
 async function resumeRun(options = {}) {
-  if (processing || starting) throw new Error("Дождитесь завершения приостановки.");
+  if (processing || starting || SupplierStage.busy()) throw new Error("Приостановите этап 2 и дождитесь завершения текущей операции.");
   starting = true;
   try {
+    if (await SupplierStage.isRunning()) throw new Error("Сначала приостановите этап 2.");
     const { run } = await chrome.storage.local.get("run");
     if (!run || !["paused", "stopped"].includes(run.status)) throw new Error("Нет приостановленного задания.");
     const interval = Number(options.interval_seconds ?? run.interval_ms / 1000);
@@ -459,7 +462,8 @@ async function getState(full = false) {
   const groups = S.supplierGroups(collection.products);
   const current = history.find(task => task.id === run?.id);
   const currentGroups = current ? S.supplierGroups(current.products) : null;
-  return { view_preferences, tasks: history.map(taskSummary).reverse(), task_count: history.length, can_clear: Boolean(history.length || collection.products.length || collection.raw_cards?.length || preferences || Object.keys(view_preferences).length || Object.keys(profiles).length || last_navigation), count: collection.products.length, page_count: collection.pages.filter(page => !page.partial).length,
+  const { supplier_search, supplier_search_cache } = await chrome.storage.local.get(["supplier_search", "supplier_search_cache"]);
+  return { supplier_stage: supplier_search ? { id: supplier_search.id, status: supplier_search.status, message: supplier_search.message } : null, stage2_busy: SupplierStage.busy() || supplier_search?.status === "running", view_preferences, tasks: history.map(taskSummary).reverse(), task_count: history.length, can_clear: Boolean(supplier_search || supplier_search_cache || history.length || collection.products.length || collection.raw_cards?.length || preferences || Object.keys(view_preferences).length || Object.keys(profiles).length || last_navigation), count: collection.products.length, page_count: collection.pages.filter(page => !page.partial).length,
     supplier_count: groups.suppliers.length, unresolved_count: groups.unresolved.length, missing_names: collection.products.filter(item => !item.shop_name).length,
     raw_count: (collection.raw_cards || []).length, preview: collection.products.slice(-4).reverse(),
     current_task: current ? { product_count: current.products.length, supplier_count: currentGroups.suppliers.length, page_count: current.completed_pages, preview: current.products.slice(-4).reverse() } : null,
@@ -528,7 +532,7 @@ async function importCollection(input) {
 async function deleteTask(id) {
   return withStateLock(async () => {
     const { collection = emptyCollection(), run, tasks = [], unassigned_memory, preferences } = await chrome.storage.local.get(["collection", "run", "tasks", "unassigned_memory", "preferences"]);
-    if (run?.status === "running" || processing || starting) throw new Error("Приостановите выполняемую проверку и дождитесь остановки перед удалением памяти.");
+    if (run?.status === "running" || processing || starting || SupplierStage.busy() || await SupplierStage.isRunning()) throw new Error("Приостановите выполняемую проверку и дождитесь остановки перед удалением памяти.");
     const history = storedTasks(tasks, run, collection);
     const task = history.find(item => item.id === id);
     if (!task) throw new Error("Проверка не найдена. Возможно, её память уже удалена.");
@@ -538,15 +542,19 @@ async function deleteTask(id) {
     if (run?.id === id) { values.run = null; values.last_navigation = null; await chrome.alarms.clear(ALARM); }
     if (preferences?.query === task.query) values.preferences = { ...preferences, query: "" };
     await chrome.storage.local.set(values);
+    const { supplier_search } = await chrome.storage.local.get("supplier_search");
+    if (supplier_search?.source_tasks.some(task => task.id === id)) await chrome.storage.local.remove("supplier_search");
+    await chrome.storage.local.remove("supplier_search_cache");
     return { deleted: true, id, remaining_tasks: remaining.length, total_products: values.collection.products.length };
   });
 }
 async function clearCollection() {
   return withStateLock(async () => {
     const { run } = await chrome.storage.local.get("run");
-    if (run?.status === "running" || processing || starting) throw new Error("Приостановите работу и дождитесь остановки перед очисткой.");
+    if (run?.status === "running" || processing || starting || SupplierStage.busy() || await SupplierStage.isRunning()) throw new Error("Приостановите работу и дождитесь остановки перед очисткой.");
     await chrome.alarms.clear(ALARM);
-    await chrome.storage.local.remove(["collection", "run", "tasks", "unassigned_memory", "preferences", "view_preferences", "profiles", "last_navigation", "pending_pick"]); return { cleared: true };
+    await chrome.alarms.clear(SupplierStage.alarm);
+    await chrome.storage.local.remove(["collection", "run", "tasks", "unassigned_memory", "preferences", "view_preferences", "profiles", "last_navigation", "pending_pick", "supplier_search", "supplier_search_cache"]); return { cleared: true };
   });
 }
 async function listTabs() { return (await chrome.tabs.query({})).filter(tab => S.webUrl(tab.url || "") && !S.productUrl(tab.url)).map(tab => ({ id: tab.id, url: tab.url, title: tab.title || new URL(tab.url).hostname, source: S.site(tab.url) })); }
@@ -589,6 +597,7 @@ async function profilePicked(sender, detail) {
   await storeProfile(tab.url, detail.mode === "card" ? { card_selector: detail.selector } : { navigation: { selector: detail.selector, label: S.text(detail.label)?.slice(0, 160) } });
   await chrome.storage.local.remove("pending_pick");
 }
+importScripts("suppliers-background.js");
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.target !== "1688-background" || sender.id !== chrome.runtime.id) return;
   if (message.type === "RESPONSE_ALLOWED" && sender.tab) {
@@ -607,6 +616,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   }
   if (message.type === "PROFILE_PICKED" && sender.tab) { void profilePicked(sender, message.detail || {}).then(() => respond({ ok: true })).catch(error => respond({ ok: false, error: error.message })); return true; }
   if (message.type === "PROGRESS" && sender.tab) {
+    void SupplierStage.progress(sender, message.detail || {}).catch(() => {});
     void withStateLock(async () => {
       const { run } = await chrome.storage.local.get("run");
       if (run?.status !== "running" || ![run.tab_id, run.detail_tab_id].includes(sender.tab.id)) return;
@@ -614,8 +624,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       await persistState({ run: logEntry({ ...run, current_count: Math.max(0, Number(detail.count) || 0) }, S.text(detail.stage)?.slice(0, 40) || "loading", S.text(detail.message)?.slice(0, 500) || "Обрабатываю страницу…") });
     }); respond({ ok: true }); return;
   }
-  if (!["popup.html", "dashboard.html", "history.html", "export.html"].map(file => chrome.runtime.getURL(file)).includes(sender.url?.split(/[?#]/)[0])) return;
+  if (!["popup.html", "dashboard.html", "history.html", "export.html", "suppliers.html"].map(file => chrome.runtime.getURL(file)).includes(sender.url?.split(/[?#]/)[0])) return;
   const operations = {
+    SUPPLIERS_STATE: () => SupplierStage.state(), SUPPLIERS_PREPARE: () => SupplierStage.prepare(message.options || {}),
+    SUPPLIERS_START: () => SupplierStage.start(message.options || {}), SUPPLIERS_PAUSE: () => SupplierStage.pause(), SUPPLIERS_SKIP: () => SupplierStage.skip(),
+    SUPPLIERS_INTERVAL: () => SupplierStage.setInterval(message.options || {}), SUPPLIERS_TAB: () => SupplierStage.showTab(), SUPPLIERS_EXPORT: () => SupplierStage.exportResult(message.options?.format),
+    OPEN_SUPPLIERS: async () => { await chrome.tabs.create({ url: chrome.runtime.getURL("suppliers.html") }); return {}; },
     STATE: () => getState(false), DATA: () => getState(true), TASK: () => getTask(message.options?.id), TABS: listTabs,
     START: () => startRun(message.options || {}), ENRICH: () => startRun(message.options || {}, true),
     NAV_SCAN: () => inspectNavigation(message.options || {}), NAV_CHOOSE: () => chooseNavigation(message.options || {}), PICK: () => enablePicker(message.options || {}),
@@ -623,8 +637,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     RESET_PROFILE: async () => { const tab = await selectedTab(message.options); return withStateLock(async () => { const { profiles = {} } = await chrome.storage.local.get("profiles"); delete profiles[new URL(tab.url).origin]; await chrome.storage.local.set({ profiles, last_navigation: null }); return {}; }); },
     PAUSE: () => pauseRun(), STOP: () => pauseRun("stopped"), RESUME: () => resumeRun(message.options || {}),
     EXPORT: () => exportCollection(message.options?.format || "json", message.options?.task_id ?? null), IMPORT: () => importCollection(message.options?.data),
-    EXCEL_DATA: async () => { const snapshot = await exportSnapshot(message.options?.task_id ?? null); const { view_preferences = {} } = await chrome.storage.local.get("view_preferences"); return { ...snapshot, export_image_quality: view_preferences.excel_image_quality || "high" }; },
-    OPEN_EXCEL: async () => { await chrome.tabs.create({ url: chrome.runtime.getURL("export.html") + (message.options?.task_id ? `?task=${encodeURIComponent(message.options.task_id)}` : "") }); return {}; },
+    EXCEL_DATA: async () => { const snapshot = message.options?.stage === 2 ? await SupplierStage.excelSnapshot() : await exportSnapshot(message.options?.task_id ?? null); const { view_preferences = {} } = await chrome.storage.local.get("view_preferences"); return { ...snapshot, export_image_quality: view_preferences.excel_image_quality || "high" }; },
+    OPEN_EXCEL: async () => { await chrome.tabs.create({ url: chrome.runtime.getURL("export.html") + (message.options?.stage === 2 ? "?stage=2" : message.options?.task_id ? `?task=${encodeURIComponent(message.options.task_id)}` : "") }); return {}; },
     SET_VIEW: () => withStateLock(async () => {
       const options = message.options || {}, updates = {};
       if ("history_images" in options) { if (typeof options.history_images !== "boolean") throw new Error("Некорректный режим отображения."); updates.history_images = options.history_images; }
@@ -649,9 +663,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   const operation = operations[message.type]; if (!operation) return;
   Promise.resolve().then(operation).then(result => respond({ ok: true, result })).catch(error => respond({ ok: false, error: error.message })); return true;
 });
-chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === ALARM) void processRun(); });
-chrome.runtime.onStartup.addListener(() => { void processRun(); });
-chrome.tabs.onRemoved.addListener(async tabId => { const { run } = await chrome.storage.local.get("run"); if (run?.status === "running" && [run.tab_id, run.detail_tab_id].includes(tabId)) await finish(run.id, "paused", "Рабочая вкладка закрыта. Откройте выдачу и начните новое задание.", "tab-closed"); });
+chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === ALARM) void processRun(); if (alarm.name === SupplierStage.alarm) void SupplierStage.process(); });
+chrome.runtime.onStartup.addListener(() => { void processRun(); void SupplierStage.process(); });
+chrome.tabs.onRemoved.addListener(async tabId => { await SupplierStage.closed(tabId); const { run } = await chrome.storage.local.get("run"); if (run?.status === "running" && [run.tab_id, run.detail_tab_id].includes(tabId)) await finish(run.id, "paused", "Рабочая вкладка закрыта. Откройте выдачу и начните новое задание.", "tab-closed"); });
 async function recordOpenedTab(tab) {
   await withStateLock(async () => {
     const { run } = await chrome.storage.local.get("run"); const pending = run?.pending_navigation;

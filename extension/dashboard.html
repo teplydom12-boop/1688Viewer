@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Supplier Viewer — поставщики</title><link rel="stylesheet" href="dashboard.css"></head>
 <body>
-  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>Карточки товаров на разных сайтах</small></div></div><a id="history-link" class="local" href="history.html" target="_blank" rel="noopener">История проверок ↗</a><span class="version">0.10</span></header>
+  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>Карточки товаров на разных сайтах</small></div></div><a class="local" href="suppliers.html">Этап 2, поиск поставщиков ↗</a><a id="history-link" class="local" href="history.html" target="_blank" rel="noopener">История проверок ↗</a><span class="version">0.11</span></header>
   <main>
     <aside>
       <h2>Новое задание</h2><p class="muted">Откройте сайт с товарами и выберите его вкладку. Доступ к новому сайту разрешается отдельно.</p>
@@ -14,7 +14,7 @@
         <label class="check"><input id="raw" type="checkbox" checked><span>Сохранять исходные карточки<small>Для повторного анализа без нового сбора</small></span></label>
         <button id="collect" class="primary wide" type="submit">Запустить задание</button>
       </form>
-      <details class="existing-tools"><summary>Дополнительные инструменты</summary><button id="enrich-all" class="wide" type="button">Проверить собранные карточки</button><small class="hint">Только по отдельному запуску. Новое задание собирает выдачу без обхода карточек.</small></details>
+      <details class="existing-tools"><summary>Поиск поставщиков</summary><button id="enrich-all" class="wide" type="button">Этап 2, поиск поставщиков ↗</button><small class="hint">Выбор заданий из истории, проверка продавцов и отдельный результат.</small></details>
       <p class="footnote">Новые вкладки отслеживаются. При капче или неоднозначном переходе работа приостанавливается.</p>
       <div class="site-tools"><h2>Настройка по образцу</h2><button id="pick-card" class="wide">Указать карточку на странице</button><button id="pick-next" class="wide">Указать кнопку перелистывания</button><button id="reset-profile" class="quiet wide">Сбросить образцы этого сайта</button><small class="hint">Выберите элемент одним кликом. Выбор сохранится для сайта. Esc — отмена.</small></div>
       <div class="import-actions"><button id="import" type="button">Импорт JSON</button><button id="reparse" type="button">Переразобрать карточки</button><input id="import-file" type="file" accept=".json,application/json" hidden></div>

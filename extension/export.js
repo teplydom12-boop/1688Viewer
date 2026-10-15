@@ -8,14 +8,14 @@ window.addEventListener("pagehide", () => { controller?.abort(); cleanupUrl(); }
 $("cancel").addEventListener("click", () => controller?.abort());
 async function initialize() {
   try {
-    const response = await chrome.runtime.sendMessage({ target: "1688-background", type: "EXCEL_DATA", options: { task_id: taskId } });
+    const response = await chrome.runtime.sendMessage({ target: "1688-background", type: "EXCEL_DATA", options: { task_id: taskId, stage: new URLSearchParams(location.search).get("stage") === "2" ? 2 : 1 } });
     if (!response?.ok) throw new Error(response?.error || "Не удалось получить данные");
     snapshot = response.result; imageUrls = SupplierImages.urls(snapshot);
     $("image-quality").value = ["standard", "high", "maximum"].includes(snapshot.export_image_quality) ? snapshot.export_image_quality : "high";
     const origins = SupplierImages.origins(imageUrls);
     const permissions = await Promise.all(origins.map(async origin => await chrome.permissions.contains({ origins: [origin] }) ? null : origin));
     requiredOrigins = permissions.filter(Boolean);
-    $("summary").textContent = `${taskId ? "Выбранная проверка" : "Вся память"}: ${snapshot.total_products} карточек (с повторами) · ${snapshot.total_tasks} проверок · ${imageUrls.length} разных изображений. Снимок данных на ${new Date(snapshot.exported_at).toLocaleString("ru-RU")}.`;
+    $("summary").textContent = `${snapshot.report_type === "supplier_search" ? "Этап 2, выбранные задания" : taskId ? "Выбранная проверка" : "Вся память"}: ${snapshot.total_products} карточек (с повторами) · ${snapshot.total_tasks} проверок · ${imageUrls.length} разных изображений. Снимок данных на ${new Date(snapshot.exported_at).toLocaleString("ru-RU")}.`;
     $("download").disabled = false;
   } catch (cause) { error(cause.message); }
 }
@@ -46,7 +46,7 @@ $("download").addEventListener("click", () => {
       if (signal.aborted) throw new DOMException("Экспорт отменён", "AbortError");
       const bytes = SupplierExcel.workbook(snapshot, { includeImages, thumbnails });
       cleanupUrl(); downloadUrl = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
-      await chrome.downloads.download({ url: downloadUrl, filename: `suppliers-${taskId ? "task" : "all"}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.xlsx`, saveAs: true });
+      await chrome.downloads.download({ url: downloadUrl, filename: `suppliers-${snapshot.report_type === "supplier_search" ? "stage2" : taskId ? "task" : "all"}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.xlsx`, saveAs: true });
       $("status").textContent = `Файл передан в загрузки Chrome.${includeImages ? ` Встроено разных картинок: ${thumbnails.size}. Недоступно: ${failed}.${lowResolution ? ` Исходников с разрешением меньше 256 px: ${lowResolution}.` : ""} В Excel нажмите − / + над столбцом фото.` : " Сохранены ссылки на картинки."}`;
     } catch (cause) { if (cause.name === "AbortError") $("status").textContent = "Подготовка отменена. Данные в памяти сохранены."; else { $("status").textContent = ""; error(cause.message); } }
     finally { controller = null; $("download").disabled = false; $("include-images").disabled = false; $("image-quality").disabled = !$("include-images").checked; $("cancel").hidden = true; $("progress").hidden = true; }

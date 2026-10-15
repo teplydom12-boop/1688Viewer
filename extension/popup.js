@@ -36,11 +36,12 @@ async function refresh() {
   $("page-count").textContent = current?.page_count ?? state.page_count;
   $("supplier-count").textContent = current?.supplier_count ?? state.supplier_count;
   $("count-label").textContent = current ? "карточек в задании, с повторами" : "карточек в памяти, с повторами";
-  $("collect").disabled = running;
+  $("collect").disabled = running || state.stage2_busy;
   $("stop").disabled = !running;
-  $("resume").disabled = !["paused", "stopped"].includes(state.run?.status);
+  $("resume").disabled = state.stage2_busy || !["paused", "stopped"].includes(state.run?.status);
   $("show-tab").hidden = !state.run || state.run.status !== "paused";
-  $("clear").disabled = running || !state.can_clear;
+  $("clear").disabled = running || state.stage2_busy || !state.can_clear;
+  $("stage2").textContent = state.supplier_stage ? "Этап 2, поиск поставщиков · " + ({ ready: "готово к проверке", running: "в работе", paused: "пауза", finished: "готово" }[state.supplier_stage.status] || "") + " ↗" : "Этап 2, поиск поставщиков ↗";
   $("export").disabled = !state.count && !state.task_count;
   $("export-xlsx").disabled = !state.count && !state.task_count;
   $("task-count").textContent = `Заданий в памяти: ${state.task_count} · Всего карточек в памяти: ${state.count}`;
@@ -90,13 +91,14 @@ $("show-tab").addEventListener("click", () => { void action(() => send("SHOW_TAB
 $("resume").addEventListener("click", () => { void action(() => send("RESUME", { interval_seconds: Number($("interval").value) })); });
 $("dashboard").addEventListener("click", () => { void action(() => send("OPEN_DASHBOARD")); });
 $("history").addEventListener("click", () => { void action(() => send("OPEN_HISTORY")); });
+$("stage2").addEventListener("click", () => { void action(() => send("OPEN_SUPPLIERS")); });
 $("export").addEventListener("click", () => { void action(() => send("EXPORT")); });
 $("export-xlsx").addEventListener("click", () => { void action(() => send("OPEN_EXCEL")); });
 $("clear").addEventListener("click", () => {
   if (confirm("Обнулить всю память приложения: товары, исходные карточки, задания, журнал, настройки и образцы сайтов? Действие необратимо. Сначала сохраните JSON или Excel.")) void action(async () => { await send("CLEAR"); $("collect-form").reset(); initialized = false; });
 });
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && (changes.collection || changes.run || changes.tasks || changes.preferences)) void refresh().catch(showError);
+  if (area === "local" && (changes.supplier_search || changes.collection || changes.run || changes.tasks || changes.preferences)) void refresh().catch(showError);
 });
 void refresh().catch(showError);
 if (chrome.tabs?.query) void chrome.tabs.query({ active: true, currentWindow: true }).then(tabs => { activeTab = tabs[0]; });

@@ -1,6 +1,6 @@
 {
   "name": "1688-viewer",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "description": "Multi-marketplace supplier collection, enrichment and product tree Chrome extension",
   "scripts": {

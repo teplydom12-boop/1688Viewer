@@ -32,7 +32,7 @@ function renderList() {
     const actions = element("td"), buttons = element("div", null, "row-actions");
     const open = element("button", "Открыть память"); open.dataset.action = "open"; open.setAttribute("aria-expanded", String(task.id === selectedId));
     open.addEventListener("click", () => { void action(async () => { selectedId = task.id; history.replaceState(null, "", `#${task.id}`); await refresh(); $("task-memory").scrollIntoView({ block: "start" }); }); });
-    const remove = element("button", "Удалить", "danger"); remove.dataset.action = "delete"; remove.disabled = state.run?.status === "running";
+    const remove = element("button", "Удалить", "danger"); remove.dataset.action = "delete"; remove.disabled = (state.run?.status === "running" || state.stage2_busy);
     remove.addEventListener("click", () => requestDelete(task.id)); buttons.append(open, remove); actions.append(buttons);
     row.append(name, element("td", task.source || "—"), element("td", labels[task.status] || task.status), element("td", `${task.completed_pages}/${task.max_pages}${task.partial_page_count ? " · есть часть страницы" : ""}`), element("td", task.product_count), actions); return row;
   }));
@@ -49,7 +49,7 @@ function renderMemory() {
   $("memory-progress").value = selected.status === "finished" ? 100 : selected.phase === "details" ? 100 * selected.detail_index / Math.max(1, selected.detail_total) : 100 * selected.completed_pages / Math.max(1, selected.max_pages);
   $("memory-counts").textContent = `Карточек (с повторами): ${selected.products.length} · Страниц: ${selected.completed_pages}/${selected.max_pages} · Исходных карточек: ${selected.raw_count || 0}`;
   $("memory-empty").hidden = Boolean(selected.products.length);
-  $("delete-task").disabled = state.run?.status === "running";
+  $("delete-task").disabled = (state.run?.status === "running" || state.stage2_busy);
   const showImages = state.view_preferences?.history_images === true;
   const imageSize = draftImageSize ?? state.view_preferences?.history_image_size ?? 48;
   applyImageSize(imageSize);
@@ -93,17 +93,17 @@ async function refresh() {
         selectedId = ""; history.replaceState(null, "", location.pathname);
       }
     }
-    $("running-note").hidden = state.run?.status !== "running";
-    $("clear-all").disabled = state.run?.status === "running" || !state.can_clear;
+    $("running-note").hidden = !(state.run?.status === "running" || state.stage2_busy);
+    $("clear-all").disabled = (state.run?.status === "running" || state.stage2_busy) || !state.can_clear;
     for (const id of ["export-all-json", "export-all-xlsx"]) $(id).disabled = !state.count && !state.task_count;
     renderList(); renderMemory();
   } catch (error) { if (selectedId && !pending) { selected = null; renderMemory(); } throw error; }
   finally { refreshing = false; if (pending) { pending = false; void refresh().catch(showError); } }
 }
 function requestDelete(id) {
-  if (busy || state?.run?.status === "running") return;
+  if (busy || (state?.run?.status === "running" || state?.stage2_busy)) return;
   const task = state.tasks.find(task => task.id === id); if (!task) return;
-  if (confirm(`Удалить память проверки «${task.query || "Без метки"}»? Её результаты, исходные карточки и журнал будут удалены. Общая память будет пересчитана по оставшимся проверкам; импортированные данные сохранятся. Действие необратимо.`)) void action(async () => {
+  if (confirm(`Удалить память проверки «${task.query || "Без метки"}»? Её результаты, исходные карточки и журнал будут удалены. Если результат этапа 2 основан на этой проверке, он также будет удалён. Общая память будет пересчитана по оставшимся проверкам; импортированные данные сохранятся. Действие необратимо.`)) void action(async () => {
     await send("DELETE_TASK", { id }); if (selectedId === id) { selectedId = ""; history.replaceState(null, "", location.pathname); }
     $("notice").textContent = "Память проверки удалена. Данные остальных проверок сохранены.";
   });
@@ -124,5 +124,5 @@ $("clear-all").addEventListener("click", () => {
   });
 });
 window.addEventListener("hashchange", () => { selectedId = location.hash.slice(1); void refresh().catch(showError); });
-chrome.storage.onChanged.addListener((changes, area) => { if (area === "local" && ["tasks", "run", "collection", "preferences", "profiles", "view_preferences"].some(key => changes[key])) void refresh().catch(showError); });
+chrome.storage.onChanged.addListener((changes, area) => { if (area === "local" && ["tasks", "run", "collection", "preferences", "profiles", "view_preferences", "supplier_search"].some(key => changes[key])) void refresh().catch(showError); });
 void refresh().catch(showError);

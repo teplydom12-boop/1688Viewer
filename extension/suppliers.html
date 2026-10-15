@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Этап 2, поиск поставщиков — Supplier Viewer</title><link rel="stylesheet" href="dashboard.css"><link rel="stylesheet" href="suppliers.css"></head>
+<body>
+  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>Этап 2, поиск поставщиков</small></div></div><nav aria-label="Разделы"><a href="dashboard.html">Этап 1, сбор выдачи</a><a href="history.html">История проверок</a><a href="suppliers.html" aria-current="page">Этап 2, поиск поставщиков</a></nav><span class="version">0.11</span></header>
+  <main class="stage-workspace">
+    <div class="page-heading"><div><h1>Этап 2, поиск поставщиков</h1><p class="muted">Выберите задания с любых площадок. В результат попадут только уже найденные карточки. Цена и минимальный заказ не влияют на отбор.</p></div><div class="exports"><button id="export-json" class="primary" disabled>Скачать JSON</button><button id="export-xlsx" disabled>Excel (.xlsx)</button><button id="export-csv" disabled>CSV</button></div></div>
+    <p id="error" class="error" role="alert" hidden></p>
+    <section class="task-selection" aria-labelledby="tasks-heading">
+      <div class="navigation-heading"><h2 id="tasks-heading">1. Выберите задания из истории</h2><button id="refresh">Обновить</button></div>
+      <div class="selection-tools"><input id="task-filter" type="search" placeholder="Название задания или площадка" aria-label="Найти задание"><button id="select-all">Выбрать показанные</button><button id="select-none">Снять выбор</button><span id="selection-count" class="muted"></span></div>
+      <form id="prepare-form"><div class="table-wrap task-list"><table class="supplier-table"><thead><tr><th>Выбор</th><th>Задание</th><th>Площадка</th><th>Состояние</th><th>Карточек</th></tr></thead><tbody id="tasks"></tbody></table><p id="tasks-empty" class="empty">В истории пока нет подходящих заданий. Сначала соберите выдачу на этапе 1.</p></div>
+      <div class="prepare-actions"><button id="prepare" class="primary" type="submit" disabled>Обработать выбранные задания</button><span class="muted">Сначала используем сохранённые данные. Страницы товаров на этом шаге не открываются.</span></div></form>
+      <p class="muted">Текущий результат сохраняется между запусками. Подготовка другого набора заданий заменит эту таблицу; для отдельного архива скачайте JSON или Excel.</p>
+      <p id="first-stage-note" class="warnings" hidden>Этап 1 выполняется. Приостановите его перед запуском поиска поставщиков.</p>
+    </section>
+    <section class="job" aria-labelledby="progress-heading">
+      <div class="job-heading"><h2 id="progress-heading">2. Уточнение поставщиков по карточкам</h2><span id="badge">Задание не выбрано</span></div>
+      <p id="status" role="status" aria-live="polite">Выберите задания и обработайте сохранённые результаты.</p>
+      <p id="current-card" class="muted" hidden></p>
+      <progress id="progress" max="100" value="0" aria-label="Прогресс поиска поставщиков"></progress><p id="progress-label" class="muted"></p>
+      <div class="queue-stats"><div><strong id="planned">0</strong><span>карточек запланировано</span></div><div><strong id="opened">0</strong><span>уже открыто</span></div><div><strong id="checked">0</strong><span>проверено</span></div><div><strong id="remaining">0</strong><span>осталось обработать</span></div><div><strong id="eta">—</strong><span>примерно до завершения</span></div></div>
+      <div class="interval-controls"><label for="interval">Интервал после проверки, сек.</label><input id="interval" type="number" min="1" max="300" step="1" value="5"><button id="save-interval" disabled>Применить интервал</button></div>
+      <p class="muted">Карточки открываются по одной в отдельной рабочей вкладке. Интервал уменьшает частоту обращений, но не исключает капчу. При проверке безопасности работа остановится; пройдите её в рабочей вкладке и нажмите «Продолжить».</p>
+      <div class="stage-actions"><button id="start" class="primary" disabled>Открыть карточки</button><button id="pause" disabled>Пауза</button><button id="show-tab" disabled>Рабочая вкладка / капча ↗</button><button id="skip" disabled>Пропустить проверку карточек и получить итог</button></div>
+    </section>
+    <section aria-labelledby="result-heading">
+      <div class="navigation-heading"><h2 id="result-heading">3. Таблица поставщиков</h2><span id="result-state" class="muted">Результат ещё не подготовлен</span></div>
+      <div class="stats"><div><strong id="supplier-count">0</strong><span>поставщиков определено</span></div><div><strong id="card-count">0</strong><span>карточек с повторами</span></div><div><strong id="unknown-count">0</strong><span>карточек без поставщика</span></div><div><strong id="task-count">0</strong><span>выбранных заданий</span></div></div>
+      <div class="filter-row"><input id="filter" type="search" placeholder="Поставщик, товар или задание" aria-label="Найти поставщика или карточку"><button id="expand-all">Раскрыть всё</button><button id="collapse-all">Свернуть всё</button></div>
+      <div class="image-controls"><button id="toggle-images" aria-pressed="false">Показать картинки</button><label for="image-size">Размер картинок</label><input id="image-size" type="range" min="32" max="192" step="16" value="48"><output id="image-size-value" for="image-size">48 px</output></div>
+      <div class="table-wrap"><table class="supplier-table"><thead><tr><th>Поставщик / найденные карточки</th><th>Площадка</th><th>Карточек</th><th>Магазин</th><th>Определение</th></tr></thead><tbody id="suppliers"></tbody></table><p id="empty" class="empty">Здесь появятся поставщики и дерево найденных карточек. Неопределённые продавцы получат пометку «Поставщик неизвестен».</p></div>
+      <p class="muted">Совпадение названий или фотографий не объединяет поставщиков. Группа «Поставщик неизвестен» содержит неустановленных продавцов и не считается одной компанией. Повторные появления карточек сохранены.</p>
+    </section>
+    <details class="activity"><summary>Журнал этапа 2</summary><ol id="log"></ol></details>
+  </main>
+  <script src="shared.js"></script><script src="images.js"></script><script src="suppliers.js"></script>
+</body></html>

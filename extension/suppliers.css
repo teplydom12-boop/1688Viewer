@@ -1,0 +1,12 @@
+.stage-workspace { display: block; max-width: 1550px; margin: auto; padding: 30px; min-height: calc(100vh - 78px); }
+header nav { display: flex; margin-left: auto; gap: 20px; font-size: 12px; }header nav [aria-current] { color: #4a443c; font-weight: 650; }
+.task-selection { border: 1px solid #e7e1d8; border-radius: 12px; padding: 20px; background: #fff; margin: 20px 0; }
+.selection-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 16px 0; }.selection-tools input { max-width: 360px; }.selection-tools .muted { margin: 0 0 0 auto; }
+.task-list { max-height: 320px; }.task-list input[type=checkbox] { width: 18px; height: 18px; accent-color: #eb5e21; }.task-list td:first-child { width: 60px; }
+.prepare-actions { display: flex; align-items: center; gap: 16px; margin-top: 16px; }.prepare-actions .muted { margin: 0; }
+.queue-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; padding: 18px 0; }.queue-stats strong { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }.queue-stats span { display: block; margin-top: 4px; color: #82796d; font-size: 11px; }
+.stage-actions,.interval-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }.interval-controls { margin: 12px 0; }.interval-controls label { margin: 0; }.interval-controls input { width: 95px; }.stage-actions #skip { margin-left: auto; }
+.image-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0; }.image-controls label { margin: 0; font-weight: 400; }.image-controls input { width: 180px; padding: 0; accent-color: #eb5e21; }.image-controls output { min-width: 48px; font-size: 12px; }
+.stage-thumbnail { display: block; object-fit: contain; background: #fff; border-radius: 4px; max-width: none; }.product-tree td { vertical-align: middle; }.product-tree .title-cell { min-width: 220px; overflow-wrap: anywhere; }
+#suppliers > tr > td { overflow-wrap: anywhere; }.supplier-name { max-width: 550px; }.supplier-name:hover { color: #b84c1d; }.stage-workspace .supplier-id { margin-left: 0; }
+@media (max-width:850px) { header { height: auto; min-height: 78px; flex-wrap: wrap; padding: 14px 18px; gap: 12px; }header nav { order: 3; width: 100%; gap: 16px; flex-wrap: wrap; }.stage-workspace { padding: 18px; }.queue-stats { grid-template-columns: repeat(2, 1fr); }.selection-tools .muted { margin-left: 0; }.prepare-actions { align-items: flex-start; flex-direction: column; }.stage-actions #skip { margin-left: 0; }.task-selection { padding: 14px; } }

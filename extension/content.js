@@ -171,7 +171,7 @@
       check();
       await refreshPageData();
       result = E.extract(document, { url: location.href, label: options.query, mode: "detail", raw: false, profile, pageData });
-      if (result.products.some(item => item.shop_name && item.supplier_url)) break;
+      if (result.products.some(item => item.supplier_url && (options.supplier_only || item.shop_name))) break;
       await delay(500);
     } while (Date.now() < deadline);
     for (const item of result.products) item.detail_checked_at = new Date().toISOString();

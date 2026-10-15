@@ -109,8 +109,8 @@ async function refresh(dataUpdated = false) {
     state = { ...state, ...next };
     for (const [id, value] of [["supplier-count", state.supplier_count], ["count", state.count], ["unresolved-count", state.unresolved_count], ["missing-names", state.missing_names]]) $(id).textContent = value;
     const running = state.run?.status === "running", paused = ["paused", "stopped"].includes(state.run?.status);
-    $("collect").disabled = running; $("pause").disabled = !running; $("resume").disabled = !paused; $("show-tab").disabled = !state.run;
-    $("enrich-all").disabled = running || !state.count; $("clear").disabled = running || !state.can_clear; $("import").disabled = running;
+    $("collect").disabled = running || state.stage2_busy; $("pause").disabled = !running; $("resume").disabled = !paused || state.stage2_busy; $("show-tab").disabled = !state.run;
+    $("enrich-all").disabled = false; $("clear").disabled = running || state.stage2_busy || !state.can_clear; $("import").disabled = running || state.stage2_busy;
     $("reparse").disabled = running || !state.raw_count;
     for (const id of ["pick-card", "pick-next", "reset-profile", "scan-nav"]) $(id).disabled = running;
     $("resume-tab").disabled = !paused || state.run?.phase === "details";
@@ -144,7 +144,7 @@ async function refresh(dataUpdated = false) {
 }
 function options() { return { tab_id: Number($("tab").value) || undefined, max_pages: Number($("pages").value), interval_seconds: Number($("interval").value), query: $("query").value, scroll: $("scroll").checked, enrich: false, raw: $("raw").checked, observe_responses: $("responses").checked }; }
 $("collect-form").addEventListener("submit", event => { event.preventDefault(); const access = authorizeSelected(); void action(async () => { await access; await send("START", options()); }); });
-$("enrich-all").addEventListener("click", () => { void action(() => send("ENRICH", options())); });
+$("enrich-all").addEventListener("click", () => { void action(() => send("OPEN_SUPPLIERS")); });
 $("pause").addEventListener("click", () => { void action(() => send("PAUSE")); });
 $("resume").addEventListener("click", () => { void action(() => send("RESUME", { interval_seconds: Number($("interval").value) })); });
 $("show-tab").addEventListener("click", () => { void action(() => send("SHOW_TAB")); });
@@ -166,5 +166,5 @@ $("import-file").addEventListener("change", () => { void action(async () => {
 }); });
 $("reparse").addEventListener("click", () => { void action(async () => { const cards = await send("RAW"); const products = SupplierCollectorEngine.reparse(cards); await send("IMPORT", { data: { products } }); }); });
 $("clear").addEventListener("click", () => { if (confirm("Обнулить всю память приложения: товары, исходные карточки, задания, журнал, настройки и образцы сайтов? Действие необратимо. Сначала сохраните JSON или Excel.")) void action(async () => { await send("CLEAR"); $("collect-form").reset(); $("filter").value = ""; $("source-filter").value = ""; initialized = false; }); });
-chrome.storage.onChanged.addListener((changes, area) => { if (area === "local" && (changes.collection || changes.run || changes.tasks || changes.preferences || changes.last_navigation || changes.profiles)) void refresh(Boolean(changes.collection)).catch(error); });
+chrome.storage.onChanged.addListener((changes, area) => { if (area === "local" && (changes.supplier_search || changes.collection || changes.run || changes.tasks || changes.preferences || changes.last_navigation || changes.profiles)) void refresh(Boolean(changes.collection)).catch(error); });
 void action(async () => { await refreshTabs(); await refresh(); });

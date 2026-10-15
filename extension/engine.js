@@ -71,7 +71,7 @@
     return null;
   }
 
-  function domFields(card, anchor, url, snapshot) {
+  function domFields(card, anchor, url, snapshot, detail = false) {
     const title = firstText([...classNodes(card, ["offertitle", "producttitle", "titletext"]), ...card.querySelectorAll('h2, h3, [itemprop="name"], .title')], snapshot) ||
       usefulName(anchor.getAttribute("title")) || usefulName(anchor.getAttribute("data-title")) || usefulName(anchor.getAttribute("aria-label")) ||
       usefulName(anchor.querySelector("img")?.getAttribute("alt")) || (anchor.tagName === "A" || anchor.hasAttribute("data-snapshot-anchor") ? usefulName(text(anchor)) : null);
@@ -88,9 +88,21 @@
     const moqNode = [...card.querySelectorAll(".moq"), ...classNodes(card, ["minorder", "startorder", "minimumorder"])].find(node => shown(node, snapshot) && /\d/.test(text(node) || ""));
     const minimumOrder = text(moqNode) || rawText.match(/(?:[≥>]\s*)?\d[\d,.]*\s*(?:件|个|套|箱|包|袋|双|台|瓶|只|千克|公斤|吨|米|码|kg|pcs)\s*(?:起批|起订|起购|起售)/i)?.[0] ||
       rawText.match(/(?:起批量|起订量|最小起订量|MOQ|min\.?\s*order|minimum order)\s*[:：]?\s*\d[\d,.]*\s*(?:件|个|套|kg|pcs|pieces?|sets?|units?)?/i)?.[0] || null;
-    const supplierLink = [...card.querySelectorAll(ANCHORS)].filter(node => shown(node, snapshot))
-      .map(node => ({ node, url: S.supplierUrl(node.getAttribute("href"), url) })).find(item => item.url);
-    const shopName = firstText(classNodes(card, ["companyname", "shopname", "suppliername", "sellername"]), snapshot) ||
+    const currentId = detail && S.productUrl(url)?.id;
+    const belongs = node => {
+      if (!currentId) return true;
+      for (let parent = node; parent && parent !== card; parent = parent.parentElement) {
+        if (parent.matches('article,li,[data-offer-id],[data-product-id],[data-renderkey]') || CARD_PATTERN.test(normalizedClass(parent))) {
+          const ids = idsIn(parent, url); if (ids.size && !ids.has(currentId)) return false;
+        }
+      }
+      return true;
+    };
+    const supplierLinks = [...card.querySelectorAll(ANCHORS)].filter(node => shown(node, snapshot) && belongs(node))
+      .map(node => ({ node, url: S.supplierUrl(node.getAttribute("href"), url) })).filter(item => item.url);
+    const ambiguous = detail && new Set(supplierLinks.map(item => item.url)).size > 1;
+    const supplierLink = ambiguous ? null : supplierLinks[0];
+    const shopName = !ambiguous && firstText(classNodes(card, ["companyname", "shopname", "suppliername", "sellername"]).filter(belongs), snapshot) ||
       usefulName(supplierLink?.node.getAttribute("title")) || usefulName(text(supplierLink?.node));
     const imageUrl = root.SupplierGeneric.image(card, url);
     return { title, price, minimum_order: minimumOrder, shop_name: shopName, supplier_url: supplierLink?.url || null, image_url: imageUrl };
@@ -192,7 +204,7 @@
       const offer = S.productUrl(url, url, generic);
       if (!offer) throw new Error("Это не распознанная карточка товара.");
       const primary = generic ? doc.querySelector('[itemtype*="Product"],main') || doc.body : doc.body;
-      const fields = generic ? root.SupplierGeneric.fields(primary, url, profile.fields) : domFields(doc.body, doc.body, url, snapshot);
+      const fields = generic ? root.SupplierGeneric.fields(primary, url, profile.fields) : domFields(doc.body, doc.body, url, snapshot, true);
       fields.title = S.text(doc.querySelector('meta[property="og:title"]')?.getAttribute("content")) || usefulName(text(doc.querySelector("h1"))) || fields.title;
       if (generic && !structured.length && !additions.records.length && (!fields.title || !fields.price && !fields.image_url)) throw new Error("Не удалось подтвердить, что открытая страница содержит карточку товара.");
       candidates.push({ offer, fields, method: "detail-dom", confidence: 75 });
@@ -308,7 +320,7 @@
       if (raw) occurrenceRaw.push({ product_id: item.product_id, source: item.source, page_card_key: pageCardKey, source_page_url: url, collected_at: timestamp, html: node ? sanitizedCard(node, url) || "" : "", record: item });
     }
     return { products, cards, raw_cards: occurrenceRaw, diagnostics: {
-      engine_version: "0.9.0", source, methods: [...new Set(candidates.map(item => item.method))], expected_page_size: expectedPageSize(doc, url), page_context: mode === "search" ? pageContext(doc, url) : null,
+      engine_version: "0.11.0", source, methods: [...new Set(candidates.map(item => item.method))], expected_page_size: expectedPageSize(doc, url), page_context: mode === "search" ? pageContext(doc, url) : null,
       data_truncated: Boolean(additions.truncated), pagination: additions.pagination,
       price_conflicts: conflicting.length,
       inferred_cards: products.filter(item => item.extraction_confidence < 90).length, no_detail_links: products.filter(item => !item.product_url).length,

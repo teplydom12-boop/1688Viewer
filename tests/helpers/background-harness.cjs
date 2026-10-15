@@ -9,7 +9,7 @@ const extensionPath = path.resolve(__dirname, "../../extension");
 async function createHarness(browser, t) {
   const context = await browser.newContext();
   const timers = new Set();
-  const tabs = new Map(); let nextTabId = 2, runtimeHandlers = [], createdHandlers = [], updatedHandlers = [];
+  const tabs = new Map(); let nextTabId = 2, runtimeHandlers = [], createdHandlers = [], updatedHandlers = [], removedHandlers = [];
   const prepared = new WeakSet();
   const popupErrors = [];
   function dispatch(message, sender) { return new Promise(resolve => { const result = runtimeHandlers[0]?.(message, sender, resolve); if (result !== true) resolve({ ok: true }); }); }
@@ -108,7 +108,7 @@ async function createHarness(browser, t) {
           for (const listener of __contentMessages) listener(message, {}, resolve);
         }), message);
       },
-      onRemoved: event([]), get onCreated() { return event(createdHandlers); }, get onUpdated() { return event(updatedHandlers); }
+      get onRemoved() { return event(removedHandlers); }, get onCreated() { return event(createdHandlers); }, get onUpdated() { return event(updatedHandlers); }
     },
     permissions: { async contains({ origins }) { return origins.every(pattern => shared.isMarketplaceUrl(pattern.replace("*", "")) || granted.has(pattern)); }, async request({ origins }) { origins.forEach(pattern => granted.add(pattern)); return true; } },
     scripting: {
@@ -123,7 +123,8 @@ async function createHarness(browser, t) {
   };
 
   function restart() {
-    runtimeHandlers = []; startupHandlers = []; alarmHandlers = []; createdHandlers = []; updatedHandlers = [];
+    for (const timer of timers) clearTimeout(timer); timers.clear();
+    runtimeHandlers = []; startupHandlers = []; alarmHandlers = []; createdHandlers = []; updatedHandlers = []; removedHandlers = [];
     sandbox = vm.createContext({
       chrome, URL, Date, crypto, console, TextEncoder, btoa,
       setTimeout(callback, delay) {
@@ -154,6 +155,9 @@ async function createHarness(browser, t) {
   return {
     context, page, command, waitFor, data, downloads, openedUi, observers, initialUrl, flags, tabs, detailHtml, granted,
     idle: () => !vm.runInContext("processing || starting", sandbox),
+    stage2Idle: () => !vm.runInContext("SupplierStage.busy()", sandbox),
+    alarm: name => { for (const handler of alarmHandlers) handler({ name }); },
+    async closeTab(id) { await tabs.get(id).close(); tabs.delete(id); for (const handler of removedHandlers) await handler(id); },
     resume() { restart(); startupHandlers[0](); }
   };
 }

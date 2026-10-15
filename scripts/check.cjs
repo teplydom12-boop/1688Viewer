@@ -12,7 +12,7 @@ for (const file of fs.readdirSync(extension).filter(file => file.endsWith(".js")
 for (const file of [manifest.background.service_worker, manifest.action.default_popup, ...Object.values(manifest.icons || {}), ...manifest.content_scripts.flatMap(item => item.js)]) {
   if (!fs.existsSync(path.join(extension, file))) throw new Error(`Missing manifest resource: ${file}`);
 }
-for (const html of [manifest.action.default_popup, "dashboard.html", "history.html", "export.html"]) {
+for (const html of [manifest.action.default_popup, "dashboard.html", "history.html", "export.html", "suppliers.html"]) {
   const source = fs.readFileSync(path.join(extension, html), "utf8");
   for (const match of source.matchAll(/(?:src|href)="([^"#:]+\.(?:js|css))"/g)) {
     if (!fs.existsSync(path.join(extension, match[1]))) throw new Error(`Missing UI resource: ${match[1]}`);
