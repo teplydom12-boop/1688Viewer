@@ -24,7 +24,7 @@
       if (!selected && score(node) < 0) continue;
       if (/icon|logo|star|badge/i.test(node.getAttribute("class") || "")) continue;
       const responsive = (node.getAttribute("srcset") || node.getAttribute("data-srcset") || "").split(",").map(item => item.trim().split(/\s+/)).sort((a, b) => parseFloat(b[1] || "0") - parseFloat(a[1] || "0"))[0]?.[0];
-      for (const raw of [node.getAttribute("data-src"), node.getAttribute("data-lazy-src"), node.getAttribute("data-original"), node.currentSrc, node.getAttribute("src"), node.getAttribute("content"), responsive]) {
+      for (const raw of [node.getAttribute("data-original"), responsive, node.getAttribute("data-src"), node.getAttribute("data-lazy-src"), node.currentSrc, node.getAttribute("src"), node.getAttribute("content")]) {
         if (!raw || /placeholder|transparent|spacer|loading\.gif/i.test(raw)) continue;
         if (/\/(?:flags|icons|logos)\//i.test(raw)) continue;
         const dimensions = raw.match(/(?:[-_/])(\d{1,3})-(\d{1,3})\.(?:svg|png|gif)(?:[?!_]|$)/i);

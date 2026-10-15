@@ -2,6 +2,9 @@
 .export-workspace p { line-height: 1.55; }
 .image-option { display: flex; gap: 10px; align-items: center; margin: 24px 0 12px; font-weight: 600; }
 .image-option input { width: 18px; height: 18px; margin: 0; accent-color: #eb5e21; }
+.quality-option { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.quality-option label { margin: 0; }
+.quality-option select { width: auto; max-width: 100%; }
 .export-workspace progress { display: block; width: 100%; margin-top: 20px; }
 .export-workspace progress[hidden] { display: none; }
 @media (max-width: 800px) { .export-workspace { margin: 16px; } }

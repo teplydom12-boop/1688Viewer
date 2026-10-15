@@ -623,12 +623,23 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     RESET_PROFILE: async () => { const tab = await selectedTab(message.options); return withStateLock(async () => { const { profiles = {} } = await chrome.storage.local.get("profiles"); delete profiles[new URL(tab.url).origin]; await chrome.storage.local.set({ profiles, last_navigation: null }); return {}; }); },
     PAUSE: () => pauseRun(), STOP: () => pauseRun("stopped"), RESUME: () => resumeRun(message.options || {}),
     EXPORT: () => exportCollection(message.options?.format || "json", message.options?.task_id ?? null), IMPORT: () => importCollection(message.options?.data),
-    EXCEL_DATA: () => exportSnapshot(message.options?.task_id ?? null),
+    EXCEL_DATA: async () => { const snapshot = await exportSnapshot(message.options?.task_id ?? null); const { view_preferences = {} } = await chrome.storage.local.get("view_preferences"); return { ...snapshot, export_image_quality: view_preferences.excel_image_quality || "high" }; },
     OPEN_EXCEL: async () => { await chrome.tabs.create({ url: chrome.runtime.getURL("export.html") + (message.options?.task_id ? `?task=${encodeURIComponent(message.options.task_id)}` : "") }); return {}; },
     SET_VIEW: () => withStateLock(async () => {
-      if (typeof message.options?.history_images !== "boolean") throw new Error("Некорректный режим отображения.");
+      const options = message.options || {}, updates = {};
+      if ("history_images" in options) { if (typeof options.history_images !== "boolean") throw new Error("Некорректный режим отображения."); updates.history_images = options.history_images; }
+      if ("history_image_size" in options) {
+        const size = options.history_image_size;
+        if (!Number.isInteger(size) || size < 32 || size > 192 || size % 16 !== 0) throw new Error("Размер картинок должен быть от 32 до 192 px с шагом 16.");
+        updates.history_image_size = size;
+      }
+      if ("excel_image_quality" in options) {
+        if (!["standard", "high", "maximum"].includes(options.excel_image_quality)) throw new Error("Неизвестное качество изображений.");
+        updates.excel_image_quality = options.excel_image_quality;
+      }
+      if (!Object.keys(updates).length || Object.keys(options).some(key => !(key in updates))) throw new Error("Некорректная настройка отображения.");
       const { view_preferences = {} } = await chrome.storage.local.get("view_preferences");
-      await chrome.storage.local.set({ view_preferences: { ...view_preferences, history_images: message.options.history_images } }); return {};
+      await chrome.storage.local.set({ view_preferences: { ...view_preferences, ...updates } }); return {};
     }),
     RAW: async () => (await chrome.storage.local.get("collection")).collection?.raw_cards || [],
     OPEN_DASHBOARD: async () => { await chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") }); return {}; },

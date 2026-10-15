@@ -212,3 +212,47 @@ test("selected Excel export opens the export screen for exactly the chosen histo
   assert.equal(snapshot.result.tasks[0].id, first); assert.equal(snapshot.result.products[0].price, "¥12.50");
   assert.equal((await h.command("EXCEL_DATA", { task_id: "missing" })).ok, false);
 });
+
+test("history image size changes immediately, persists across tabs/reloads and never reloads thumbnails", async t => {
+  const h = await createHarness(browser, t), id = await collect(h, "Размер картинок");
+  for (const product of h.data.tasks[0].products) product.image_url = "https://images.test/ok.png";
+  let requests = 0;
+  await h.context.route("https://images.test/**", route => { requests++; return route.fulfill({ contentType: "image/png", body: fs.readFileSync(path.join(__dirname, "fixtures/thumbnail.png")) }); });
+  const history = await openHistory(h, id);
+  await history.waitForFunction(() => !document.getElementById("task-memory").hidden);
+  await history.locator("#toggle-images").click();
+  await history.waitForFunction(() => document.querySelectorAll('.history-thumbnail').length === 2 && [...document.querySelectorAll('.history-thumbnail')].every(img => img.naturalWidth > 0));
+  const before = requests;
+  await history.locator("#image-size").evaluate(node => { node.value = "192"; node.dispatchEvent(new Event("input", { bubbles: true })); });
+  assert.equal(await history.locator(".history-thumbnail").first().evaluate(img => img.clientWidth), 192);
+  assert.equal(await history.locator("#image-size-value").textContent(), "192 px");
+  assert.equal(h.data.view_preferences.history_image_size, undefined, "dragging resizes locally before saving on release");
+  await history.locator("#image-size").dispatchEvent("change"); await h.waitFor(data => data.view_preferences?.history_image_size === 192);
+  assert.equal(requests, before);
+  const second = await openHistory(h, id);
+  await second.waitForFunction(() => document.querySelector('.history-thumbnail')?.width === 192 && [...document.querySelectorAll('.history-thumbnail')].every(img => img.naturalWidth > 0));
+  const afterOpen = requests;
+  await history.locator("#image-size").evaluate(node => { node.value = "32"; node.dispatchEvent(new Event("input", { bubbles: true })); node.dispatchEvent(new Event("change", { bubbles: true })); });
+  await second.waitForFunction(() => document.querySelector('.history-thumbnail')?.width === 32);
+  assert.equal(await history.locator(".history-thumbnail").first().evaluate(img => img.clientHeight), 32); assert.equal(requests, afterOpen);
+  await history.reload(); await history.waitForFunction(() => document.querySelector('.history-thumbnail')?.width === 32 && document.querySelector('.history-thumbnail')?.naturalWidth > 0);
+  await history.locator("#toggle-images").click(); await history.waitForFunction(() => document.querySelectorAll('.history-thumbnail').length === 0);
+  const hiddenRequests = requests;
+  await history.locator("#image-size").evaluate(node => { node.value = "128"; node.dispatchEvent(new Event("input", { bubbles: true })); node.dispatchEvent(new Event("change", { bubbles: true })); });
+  await h.waitFor(data => data.view_preferences?.history_image_size === 128); assert.equal(requests, hiddenRequests);
+  assert.equal((await h.command("SET_VIEW", { excel_image_quality: "maximum" })).ok, true);
+  assert.equal((await h.command("EXCEL_DATA")).result.export_image_quality, "maximum");
+  assert.equal(h.data.view_preferences.history_image_size, 128); assert.equal(h.data.view_preferences.history_images, false);
+  for (const options of [{ history_image_size: 31 }, { history_image_size: 33 }, { history_image_size: 256 }, { history_image_size: "128" }, { excel_image_quality: "unsafe" }, {}]) assert.equal((await h.command("SET_VIEW", options)).ok, false);
+  await h.command("CLEAR"); await history.waitForFunction(() => document.getElementById("task-memory").hidden); assert.deepEqual(h.data, {});
+});
+
+test("history prefers the Alibaba CDN original and falls back to the captured thumbnail", async t => {
+  const h = await createHarness(browser, t), id = await collect(h, "Оригинал картинки");
+  h.data.tasks[0].products[0].image_url = "https://cbu01.alicdn.com/img/ibank/photo.jpg_80x80.jpg";
+  const requests = [];
+  await h.context.route("https://cbu01.alicdn.com/**", route => { requests.push(route.request().url()); const original = route.request().url().endsWith('/photo.jpg'); return route.fulfill({ status: original ? 404 : 200, contentType: original ? "text/plain" : "image/png", body: original ? "missing" : fs.readFileSync(path.join(__dirname, "fixtures/thumbnail.png")) }); });
+  const history = await openHistory(h, id); await history.waitForFunction(() => !document.getElementById("task-memory").hidden);
+  await history.locator("#toggle-images").click(); await history.waitForFunction(() => document.querySelector('.history-thumbnail')?.naturalWidth > 0);
+  assert.deepEqual(requests, ["https://cbu01.alicdn.com/img/ibank/photo.jpg", "https://cbu01.alicdn.com/img/ibank/photo.jpg_80x80.jpg"]);
+});

@@ -15,6 +15,14 @@ async function setup(t, url = "https://catalog.example/search") {
 }
 async function inert(page, html, extra = {}) { return page.evaluate(({ html, extra }) => SupplierCollectorEngine.fromHTML(html, { url: location.href, ...extra }), { html, extra }); }
 
+test("product images prefer an explicit original or the largest responsive source over a small loaded thumbnail", async t => {
+  const page = await setup(t);
+  const html = '<article data-product-id="cup"><a href="/items/cup"><img src="https://img.example/small.jpg" data-src="https://img.example/medium.jpg" data-original="https://img.example/original.jpg" srcset="https://img.example/400.jpg 400w, https://img.example/1600.jpg 1600w" alt="Cup"></a><h3>Cup</h3><p>$10</p></article>';
+  const original = await inert(page, html); assert.equal(original.cards[0].image_url, "https://img.example/original.jpg");
+  const responsive = await inert(page, html.replace('data-original="https://img.example/original.jpg"', ''));
+  assert.equal(responsive.cards[0].image_url, "https://img.example/1600.jpg");
+});
+
 test("microdata keeps seller scope separate from the product and supplies currency", async t => {
   const page = await setup(t);
   const html = '<article itemscope itemtype="https://schema.org/Product" itemid="https://catalog.example/items/cup"><div itemprop="offers" itemscope itemtype="https://schema.org/Offer"><div itemprop="seller" itemscope itemtype="https://schema.org/Organization"><span itemprop="name">Factory first in markup</span><a itemprop="url" href="/vendors/one">Store</a></div><meta itemprop="price" content="12.50"><meta itemprop="priceCurrency" content="EUR"></div><h3 itemprop="name">Actual cup</h3><img itemprop="image" src="https://cdn.example/cup.jpg"></article>';

@@ -2,6 +2,11 @@
 const $ = id => document.getElementById(id);
 const labels = { running: "В работе", paused: "Пауза", stopped: "Остановлено", finished: "Завершено" };
 let state = null, selectedId = location.hash.slice(1), selected = null, refreshing = false, pending = false, busy = false;
+let draftImageSize = null, sizeRevision = 0;
+function applyImageSize(size) {
+  $("image-size").value = size; $("image-size-value").textContent = `${size} px`;
+  for (const img of $("memory-products").querySelectorAll(".history-thumbnail")) { img.width = size; img.height = size; }
+}
 function element(tag, text, className) { const node = document.createElement(tag); if (text != null) node.textContent = text; if (className) node.className = className; return node; }
 function link(url, text) {
   if (!SupplierCollector.webUrl(url)) return element("span", text || "—");
@@ -46,6 +51,8 @@ function renderMemory() {
   $("memory-empty").hidden = Boolean(selected.products.length);
   $("delete-task").disabled = state.run?.status === "running";
   const showImages = state.view_preferences?.history_images === true;
+  const imageSize = draftImageSize ?? state.view_preferences?.history_image_size ?? 48;
+  applyImageSize(imageSize);
   $("toggle-images").textContent = showImages ? "Скрыть картинки" : "Показать картинки";
   $("toggle-images").setAttribute("aria-pressed", String(showImages));
   const thumbnails = new Map([...$("memory-products").querySelectorAll("[data-image-key]")].map(node => [node.dataset.imageKey, node]));
@@ -58,10 +65,11 @@ function renderMemory() {
       let thumbnail = thumbnails.get(key);
       if (!thumbnail) {
         thumbnail = link(product.image_url, ""); thumbnail.dataset.imageKey = key;
-        const img = element("img", null, "history-thumbnail"); img.width = 48; img.height = 48; img.alt = product.title || "Изображение товара";
+        const img = element("img", null, "history-thumbnail"); img.width = imageSize; img.height = imageSize; img.alt = product.title || "Изображение товара";
         img.loading = "lazy"; img.decoding = "async"; img.referrerPolicy = "no-referrer";
-        img.addEventListener("error", () => { img.remove(); thumbnail.append(element("span", "Картинка недоступна ↗", "image-unavailable")); }, { once: true });
-        img.src = product.image_url; thumbnail.replaceChildren(img);
+        const sources = SupplierImages.candidates(product.image_url); let source = 0;
+        img.addEventListener("error", () => { if (++source < sources.length) img.src = sources[source]; else { img.remove(); thumbnail.append(element("span", "Картинка недоступна ↗", "image-unavailable")); } });
+        img.src = sources[0] || product.image_url; thumbnail.replaceChildren(img);
       }
       image.append(thumbnail);
     } else image.append(product.image_url ? link(product.image_url, "Открыть изображение ↗") : element("span", "—"));
@@ -104,6 +112,11 @@ $("history-filter").addEventListener("input", renderList);
 $("refresh").addEventListener("click", () => { void action(() => Promise.resolve()); });
 $("delete-task").addEventListener("click", () => requestDelete(selectedId));
 $("toggle-images").addEventListener("click", () => { void action(() => send("SET_VIEW", { history_images: state.view_preferences?.history_images !== true })); });
+$("image-size").addEventListener("input", () => { draftImageSize = Number($("image-size").value); applyImageSize(draftImageSize); });
+$("image-size").addEventListener("change", () => {
+  const size = Number($("image-size").value), revision = ++sizeRevision; draftImageSize = size;
+  void send("SET_VIEW", { history_image_size: size }).then(async () => { if (revision === sizeRevision) { draftImageSize = null; await refresh(); } }).catch(cause => { if (revision === sizeRevision) { draftImageSize = null; void refresh().catch(showError); } showError(cause); });
+});
 for (const [id, format, scoped] of [["export-all-json", "json", false], ["export-all-xlsx", "xlsx", false], ["export-task-json", "json", true], ["export-task-xlsx", "xlsx", true], ["export-task-raw", "raw", true]]) $(id).addEventListener("click", () => { void action(() => send(format === "xlsx" ? "OPEN_EXCEL" : "EXPORT", { format, ...(scoped ? { task_id: selectedId } : {}) })); });
 $("clear-all").addEventListener("click", () => {
   if (confirm("Удалить всю память приложения: все проверки, товары, исходные карточки, журналы, настройки и образцы сайтов? Действие необратимо. Сначала сохраните JSON или Excel.")) void action(async () => {

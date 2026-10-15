@@ -11,7 +11,11 @@
 .memory-products th:first-child { min-width: 220px; }.memory-products td { max-width: 370px; overflow-wrap: anywhere; }
 #memory-pages { padding-left: 20px; font-size: 12px; line-height: 1.8; }
 #notice { font-size: 13px; color: #397647; }
-.history-thumbnail { width: 48px; height: 48px; object-fit: contain; display: block; background: #fff; border-radius: 4px; }
+.history-thumbnail { object-fit: contain; display: block; background: #fff; border-radius: 4px; max-width: none; }
+.image-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0; }
+.image-controls label { margin: 0; font-weight: 400; }
+.image-controls input { width: 180px; padding: 0; accent-color: #eb5e21; }
+.image-controls output { min-width: 48px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .memory-products td { vertical-align: middle; padding-top: 10px; padding-bottom: 10px; }
 .image-unavailable { font-size: 11px; color: #82796d; }
 #toggle-images[aria-pressed="true"] { border-color: #eb5e21; color: #b44516; background: #fff4eb; }
