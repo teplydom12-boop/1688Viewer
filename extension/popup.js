@@ -84,6 +84,7 @@ $("stop").addEventListener("click", () => { void action(() => send("PAUSE")); })
 $("show-tab").addEventListener("click", () => { void action(() => send("SHOW_TAB")); });
 $("resume").addEventListener("click", () => { void action(() => send("RESUME", { interval_seconds: Number($("interval").value) })); });
 $("dashboard").addEventListener("click", () => { void action(() => send("OPEN_DASHBOARD")); });
+$("history").addEventListener("click", () => { void action(() => send("OPEN_HISTORY")); });
 $("export").addEventListener("click", () => { void action(() => send("EXPORT")); });
 $("export-xlsx").addEventListener("click", () => { void action(() => send("EXPORT", { format: "xlsx" })); });
 $("clear").addEventListener("click", () => {

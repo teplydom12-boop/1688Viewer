@@ -1,0 +1,14 @@
+.history-workspace { display: block; max-width: 1600px; margin: 0 auto; padding: 30px; }
+.history-workspace .danger { margin: 0; border-color: #e7c7bf; }
+.history-workspace .page-heading { margin-bottom: 20px; }
+.history-workspace .exports { max-width: 560px; }
+.history-workspace .filter-row input { max-width: 420px; }
+.history-workspace .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.history-workspace .supplier-id { margin-left: 0; }
+#history-tasks tr[data-selected="true"] { background: #fff4eb; }
+#task-memory { margin-top: 30px; padding-top: 25px; border-top: 1px solid #ddd5ca; scroll-margin-top: 20px; }
+#memory-title { font-size: 22px; }
+.memory-products th:first-child { min-width: 220px; }.memory-products td { max-width: 370px; overflow-wrap: anywhere; }
+#memory-pages { padding-left: 20px; font-size: 12px; line-height: 1.8; }
+#notice { font-size: 13px; color: #397647; }
+@media (max-width: 850px) { .history-workspace { padding: 18px; }.history-workspace .page-heading { display: block; }.history-workspace .exports { justify-content: flex-start; margin-top: 12px; } }

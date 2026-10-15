@@ -21,6 +21,25 @@ function storedTasks(tasks = [], run, collection = emptyCollection()) {
   const keys = new Set(run.product_keys || []);
   return [...tasks, taskRecord(run, { products: collection.products.filter(item => keys.has(productKey(item))), pages: collection.pages.filter(page => page.checkpoint?.startsWith(`${run.id}:`)) })];
 }
+function unassignedMemory(collection, tasks) {
+  const keys = new Set(tasks.flatMap(task => task.products.map(productKey)));
+  const ids = new Set(tasks.map(task => task.id));
+  return {
+    products: collection.products.filter(item => !keys.has(productKey(item))).map(item => ({ ...item, task_ids: [] })),
+    pages: collection.pages.filter(page => !ids.has(page.task_id) && !tasks.some(task => page.checkpoint?.startsWith(`${task.id}:`))),
+    raw_cards: (collection.raw_cards || []).filter(card => !ids.has(card.task_id))
+  };
+}
+function rebuildMemory(tasks, independent, rawCards) {
+  const observations = [...independent.products, ...tasks.flatMap(task => task.products.map(item => ({ ...item, task_ids: [task.id] })))];
+  observations.sort((a, b) => (Date.parse(a.last_seen_at || a.collected_at) || 0) - (Date.parse(b.last_seen_at || b.collected_at) || 0));
+  const ids = new Set(tasks.map(task => task.id));
+  return {
+    products: S.mergeProducts([], observations),
+    pages: [...independent.pages, ...tasks.flatMap(task => task.pages.map(page => ({ ...page, task_id: task.id })))],
+    raw_cards: rawCards.filter(card => !card.task_id || ids.has(card.task_id))
+  };
+}
 // Called inside withStateLock, so task snapshots and the current run change atomically.
 async function persistState(values, result = null, partial = false) {
   const stored = await chrome.storage.local.get(["tasks", "run"]);
@@ -29,6 +48,13 @@ async function persistState(values, result = null, partial = false) {
   let tasks = storedTasks(stored.tasks, stored.run, stored.collection);
   const run = values.run;
   if (run) {
+    if (run.id !== stored.run?.id) {
+      const { unassigned_memory } = await chrome.storage.local.get("unassigned_memory");
+      if (!unassigned_memory) {
+        const collection = stored.collection || (await chrome.storage.local.get("collection")).collection || emptyCollection();
+        values.unassigned_memory = unassignedMemory(collection, tasks);
+      }
+    }
     if (stored.run && stored.run.id !== run.id) tasks = tasks.map(task => task.id === stored.run.id && ["paused", "stopped"].includes(task.status) ? { ...task, status: "stopped", finished_at: new Date().toISOString(), message: "Сохранено в истории перед запуском нового задания." } : task);
     const index = tasks.findIndex(task => task.id === run.id);
     let record = taskRecord(run, tasks[index]);
@@ -352,30 +378,33 @@ async function pauseRun(status = "paused") {
 }
 async function resumeRun(options = {}) {
   if (processing || starting) throw new Error("Дождитесь завершения приостановки.");
-  const { run } = await chrome.storage.local.get("run");
-  if (!run || !["paused", "stopped"].includes(run.status)) throw new Error("Нет приостановленного задания.");
-  const interval = Number(options.interval_seconds ?? run.interval_ms / 1000);
-  if (!Number.isFinite(interval) || interval < 1 || interval > 30) throw new Error("Укажите паузу от 1 до 30 секунд.");
-  if (options.tab_id != null && run.phase !== "details") { const selected = await chrome.tabs.get(Number(options.tab_id)); await ensureAccess(selected.url); run.tab_id = selected.id; run.phase = "search"; run.pending_navigation = null; run.navigation = null; }
-  const tabId = run.phase === "details" ? run.detail_tab_id : run.tab_id;
-  let reloadForResponses = false;
-  if (tabId != null) {
-    const tab = await chrome.tabs.get(tabId); await sendToTab(tabId, "RESET"); await sendToTab(tabId, "CHECK");
-    if (run.challenge_navigation && options.tab_id == null && run.phase !== "details") {
-      const peek = await sendToTab(tabId, "PEEK", { profile: await siteProfile(tab.url), query: run.query });
-      const previous = new Set((run.previous_fingerprint || "").split(","));
-      const changed = peek.products.some(item => !previous.has(productKey(item)));
-      const recovery = run.challenge_navigation;
-      run.phase = !changed && tabId === recovery.source_tab_id && S.canonicalUrl(tab.url) === S.canonicalUrl(recovery.source_url) ? "navigate" : "search";
-      run.pending_navigation = null; run.challenge_navigation = null;
-    } else if (run.observe_responses && run.pause_reason === "challenge" && run.phase === "search" && S.isMarketplaceUrl(tab.url) && S.detectSearch(tab.url).search_type === "text" && S.detectSearch(tab.url).query) {
-      const peek = await sendToTab(tabId, "PEEK", { profile: await siteProfile(tab.url), query: run.query });
-      reloadForResponses = !peek.products.length;
+  starting = true;
+  try {
+    const { run } = await chrome.storage.local.get("run");
+    if (!run || !["paused", "stopped"].includes(run.status)) throw new Error("Нет приостановленного задания.");
+    const interval = Number(options.interval_seconds ?? run.interval_ms / 1000);
+    if (!Number.isFinite(interval) || interval < 1 || interval > 30) throw new Error("Укажите паузу от 1 до 30 секунд.");
+    if (options.tab_id != null && run.phase !== "details") { const selected = await chrome.tabs.get(Number(options.tab_id)); await ensureAccess(selected.url); run.tab_id = selected.id; run.phase = "search"; run.pending_navigation = null; run.navigation = null; }
+    const tabId = run.phase === "details" ? run.detail_tab_id : run.tab_id;
+    let reloadForResponses = false;
+    if (tabId != null) {
+      const tab = await chrome.tabs.get(tabId); await sendToTab(tabId, "RESET"); await sendToTab(tabId, "CHECK");
+      if (run.challenge_navigation && options.tab_id == null && run.phase !== "details") {
+        const peek = await sendToTab(tabId, "PEEK", { profile: await siteProfile(tab.url), query: run.query });
+        const previous = new Set((run.previous_fingerprint || "").split(","));
+        const changed = peek.products.some(item => !previous.has(productKey(item)));
+        const recovery = run.challenge_navigation;
+        run.phase = !changed && tabId === recovery.source_tab_id && S.canonicalUrl(tab.url) === S.canonicalUrl(recovery.source_url) ? "navigate" : "search";
+        run.pending_navigation = null; run.challenge_navigation = null;
+      } else if (run.observe_responses && run.pause_reason === "challenge" && run.phase === "search" && S.isMarketplaceUrl(tab.url) && S.detectSearch(tab.url).search_type === "text" && S.detectSearch(tab.url).query) {
+        const peek = await sendToTab(tabId, "PEEK", { profile: await siteProfile(tab.url), query: run.query });
+        reloadForResponses = !peek.products.length;
+      }
     }
-  }
-  await withStateLock(async () => { await persistState({ run: { ...logEntry(run, run.phase, "Продолжаю с сохранённого этапа…"), status: "running", pause_reason: null, required_origin: null, interval_ms: interval * 1000 } }); });
-  if (reloadForResponses) { const tab = await chrome.tabs.get(tabId); await registerResponseScripts(tab.url); await chrome.tabs.update(tabId, { url: tab.url }); }
-  void processRun(); return { resumed: true };
+    await withStateLock(async () => { await persistState({ run: { ...logEntry(run, run.phase, "Продолжаю с сохранённого этапа…"), status: "running", pause_reason: null, required_origin: null, interval_ms: interval * 1000 } }); });
+    if (reloadForResponses) { const tab = await chrome.tabs.get(tabId); await registerResponseScripts(tab.url); await chrome.tabs.update(tabId, { url: tab.url }); }
+    void processRun(); return { resumed: true };
+  } finally { starting = false; }
 }
 async function getState(full = false) {
   const { collection = emptyCollection(), run = null, preferences = null, last_navigation = null, tasks = [], profiles = {} } = await chrome.storage.local.get(["collection", "run", "preferences", "last_navigation", "tasks", "profiles"]);
@@ -391,12 +420,18 @@ async function getTask(id) {
   const { tasks = [], run, collection = emptyCollection() } = await chrome.storage.local.get(["tasks", "run", "collection"]);
   const task = storedTasks(tasks, run, collection).find(item => item.id === id);
   if (!task) throw new Error("Задание не найдено. Возможно, память была очищена.");
-  return task;
+  return { ...task, raw_count: collection.raw_cards.filter(card => card.task_id === id).length };
 }
-async function exportCollection(format = "json") {
+async function exportCollection(format = "json", taskId = null) {
   if (!["json", "raw", "csv", "xlsx"].includes(format)) throw new Error("Неизвестный формат экспорта.");
-  const { collection = emptyCollection(), tasks = [], run } = await chrome.storage.local.get(["collection", "tasks", "run"]);
-  const history = storedTasks(tasks, run, collection);
+  let { collection = emptyCollection(), tasks = [], run } = await chrome.storage.local.get(["collection", "tasks", "run"]);
+  let history = storedTasks(tasks, run, collection);
+  if (taskId != null) {
+    const task = history.find(item => item.id === taskId);
+    if (!task) throw new Error("Проверка не найдена. Возможно, её память уже удалена.");
+    history = [task];
+    collection = { products: task.products, pages: task.pages, raw_cards: collection.raw_cards.filter(card => card.task_id === taskId) };
+  }
   if (!collection.products.length && !history.length) throw new Error("Сначала запустите задание или импортируйте товары.");
   const groups = S.supplierGroups(collection.products);
   const output = { schema_version: 3, sources: [...new Set(collection.products.map(item => item.source))], exported_at: new Date().toISOString(), total_products: collection.products.length, total_suppliers: groups.suppliers.length,
@@ -404,14 +439,16 @@ async function exportCollection(format = "json") {
     ...(format === "raw" ? { raw_cards: collection.raw_cards || [] } : {}) };
   const csv = format === "csv";
   const url = format === "xlsx" ? globalThis.SupplierExcel.dataUrl(output) : `data:${csv ? "text/csv" : "application/json"};charset=utf-8,` + encodeURIComponent(csv ? S.csv(collection.products) : JSON.stringify(output, null, 2));
-  const downloadId = await chrome.downloads.download({ url, filename: `suppliers-${format}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.${format === "xlsx" ? "xlsx" : csv ? "csv" : "json"}`, saveAs: true });
+  const downloadId = await chrome.downloads.download({ url, filename: `suppliers-${taskId == null ? "all" : "task"}-${format}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.${format === "xlsx" ? "xlsx" : csv ? "csv" : "json"}`, saveAs: true });
   return { download_id: downloadId };
 }
 async function importCollection(input) {
   return withStateLock(async () => {
-    const { collection = emptyCollection(), run } = await chrome.storage.local.get(["collection", "run"]);
+    const { collection = emptyCollection(), run, tasks = [], unassigned_memory } = await chrome.storage.local.get(["collection", "run", "tasks", "unassigned_memory"]);
     if (processing || starting || run?.status === "running") throw new Error("Приостановите работу перед импортом.");
     const imported = S.importProducts(input);
+    const independent = unassigned_memory || unassignedMemory(collection, storedTasks(tasks, run, collection));
+    const independentRaw = new Map(independent.raw_cards.map(card => [`${card.source}:${card.product_id}:${card.source_page_url}`, card]));
     const products = S.mergeProducts(collection.products, imported);
     const raw = new Map((collection.raw_cards || []).map(card => [`${card.source}:${card.product_id}:${card.source_page_url}:${card.task_id || "legacy"}`, card]));
     const keys = new Set(imported.map(productKey));
@@ -422,10 +459,27 @@ async function importCollection(input) {
         if (!S.webUrl(safe.source_page_url)) continue;
         if (card.record) try { const parsed = S.importProducts({ products: [card.record] })[0]; if (productKey(parsed) === `${source}:${safe.product_id}`) safe.record = parsed; } catch { /* preserve inert markup, discard malformed business record */ }
         raw.set(`${safe.source}:${safe.product_id}:${safe.source_page_url}:legacy`, safe);
+        independentRaw.set(`${safe.source}:${safe.product_id}:${safe.source_page_url}`, safe);
       }
     }
-    await chrome.storage.local.set({ collection: { ...collection, products, raw_cards: [...raw.values()] } });
+    await chrome.storage.local.set({ collection: { ...collection, products, raw_cards: [...raw.values()] }, unassigned_memory: { ...independent, products: S.mergeProducts(independent.products, imported), raw_cards: [...independentRaw.values()] } });
     return { imported: imported.length, total: products.length };
+  });
+}
+async function deleteTask(id) {
+  return withStateLock(async () => {
+    const { collection = emptyCollection(), run, tasks = [], unassigned_memory, preferences } = await chrome.storage.local.get(["collection", "run", "tasks", "unassigned_memory", "preferences"]);
+    if (run?.status === "running" || processing || starting) throw new Error("Приостановите выполняемую проверку и дождитесь остановки перед удалением памяти.");
+    const history = storedTasks(tasks, run, collection);
+    const task = history.find(item => item.id === id);
+    if (!task) throw new Error("Проверка не найдена. Возможно, её память уже удалена.");
+    const independent = unassigned_memory || unassignedMemory(collection, history);
+    const remaining = history.filter(item => item.id !== id);
+    const values = { tasks: remaining, collection: rebuildMemory(remaining, independent, collection.raw_cards), unassigned_memory: independent };
+    if (run?.id === id) { values.run = null; values.last_navigation = null; await chrome.alarms.clear(ALARM); }
+    if (preferences?.query === task.query) values.preferences = { ...preferences, query: "" };
+    await chrome.storage.local.set(values);
+    return { deleted: true, id, remaining_tasks: remaining.length, total_products: values.collection.products.length };
   });
 }
 async function clearCollection() {
@@ -433,7 +487,7 @@ async function clearCollection() {
     const { run } = await chrome.storage.local.get("run");
     if (run?.status === "running" || processing || starting) throw new Error("Приостановите работу и дождитесь остановки перед очисткой.");
     await chrome.alarms.clear(ALARM);
-    await chrome.storage.local.remove(["collection", "run", "tasks", "preferences", "profiles", "last_navigation", "pending_pick"]); return { cleared: true };
+    await chrome.storage.local.remove(["collection", "run", "tasks", "unassigned_memory", "preferences", "profiles", "last_navigation", "pending_pick"]); return { cleared: true };
   });
 }
 async function listTabs() { return (await chrome.tabs.query({})).filter(tab => S.webUrl(tab.url || "") && !S.productUrl(tab.url)).map(tab => ({ id: tab.id, url: tab.url, title: tab.title || new URL(tab.url).hostname, source: S.site(tab.url) })); }
@@ -501,7 +555,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       await persistState({ run: logEntry({ ...run, current_count: Math.max(0, Number(detail.count) || 0) }, S.text(detail.stage)?.slice(0, 40) || "loading", S.text(detail.message)?.slice(0, 500) || "Обрабатываю страницу…") });
     }); respond({ ok: true }); return;
   }
-  if (![chrome.runtime.getURL("popup.html"), chrome.runtime.getURL("dashboard.html")].includes(sender.url)) return;
+  if (!["popup.html", "dashboard.html", "history.html"].map(file => chrome.runtime.getURL(file)).includes(sender.url?.split(/[?#]/)[0])) return;
   const operations = {
     STATE: () => getState(false), DATA: () => getState(true), TASK: () => getTask(message.options?.id), TABS: listTabs,
     START: () => startRun(message.options || {}), ENRICH: () => startRun(message.options || {}, true),
@@ -509,10 +563,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     FINISH_SEARCH: async () => { const id = await withStateLock(async () => { const { run } = await chrome.storage.local.get("run"); if (!run || !["paused", "stopped"].includes(run.status) || run.phase === "details" || processing || starting) throw new Error("Нет остановленного сбора выдачи."); await persistState({ run: { ...run, status: "running", pending_navigation: null } }); return run.id; }); await beginDetails(id, "Пользователь завершил сбор выдачи."); void processRun(); return {}; },
     RESET_PROFILE: async () => { const tab = await selectedTab(message.options); return withStateLock(async () => { const { profiles = {} } = await chrome.storage.local.get("profiles"); delete profiles[new URL(tab.url).origin]; await chrome.storage.local.set({ profiles, last_navigation: null }); return {}; }); },
     PAUSE: () => pauseRun(), STOP: () => pauseRun("stopped"), RESUME: () => resumeRun(message.options || {}),
-    EXPORT: () => exportCollection(message.options?.format || "json"), IMPORT: () => importCollection(message.options?.data),
+    EXPORT: () => exportCollection(message.options?.format || "json", message.options?.task_id ?? null), IMPORT: () => importCollection(message.options?.data),
     RAW: async () => (await chrome.storage.local.get("collection")).collection?.raw_cards || [],
     OPEN_DASHBOARD: async () => { await chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") }); return {}; },
-    SHOW_TAB: openWorkingTab, CLEAR: clearCollection
+    OPEN_HISTORY: async () => { await chrome.tabs.create({ url: chrome.runtime.getURL("history.html") }); return {}; },
+    SHOW_TAB: openWorkingTab, DELETE_TASK: () => deleteTask(message.options?.id), CLEAR: clearCollection
   };
   const operation = operations[message.type]; if (!operation) return;
   Promise.resolve().then(operation).then(result => respond({ ok: true, result })).catch(error => respond({ ok: false, error: error.message })); return true;
