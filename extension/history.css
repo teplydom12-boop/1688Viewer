@@ -11,4 +11,8 @@
 .memory-products th:first-child { min-width: 220px; }.memory-products td { max-width: 370px; overflow-wrap: anywhere; }
 #memory-pages { padding-left: 20px; font-size: 12px; line-height: 1.8; }
 #notice { font-size: 13px; color: #397647; }
+.history-thumbnail { width: 48px; height: 48px; object-fit: contain; display: block; background: #fff; border-radius: 4px; }
+.memory-products td { vertical-align: middle; padding-top: 10px; padding-bottom: 10px; }
+.image-unavailable { font-size: 11px; color: #82796d; }
+#toggle-images[aria-pressed="true"] { border-color: #eb5e21; color: #b44516; background: #fff4eb; }
 @media (max-width: 850px) { .history-workspace { padding: 18px; }.history-workspace .page-heading { display: block; }.history-workspace .exports { justify-content: flex-start; margin-top: 12px; } }

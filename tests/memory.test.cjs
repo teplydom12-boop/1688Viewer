@@ -153,8 +153,8 @@ test("dashboard shows task history, historical results, Excel export and clears 
   await dashboard.waitForFunction(() => document.getElementById("task-view-note").textContent.includes("Снимок"));
   assert.match(await dashboard.locator(".product-tree").textContent(), /12.50/);
   assert.doesNotMatch(await dashboard.locator(".product-tree").textContent(), /99.00/);
-  await dashboard.locator("#export-xlsx").click(); await h.waitFor(() => h.downloads.length === 1);
-  assert.match(h.downloads[0].filename, /\.xlsx$/);
+  await dashboard.locator("#export-xlsx").click(); await h.waitFor(() => h.openedUi.length === 1);
+  assert.match(h.openedUi[0], /\/export\.html$/);
   dashboard.once("dialog", dialog => dialog.accept()); await dashboard.locator("#clear").click();
   await dashboard.waitForFunction(() => document.getElementById("count").textContent === "0" && document.querySelectorAll("#tasks tr").length === 0);
   assert.equal(await dashboard.locator("#task-filter option").count(), 1);
@@ -171,8 +171,8 @@ test("popup starts a collection-only task even if old enrichment preference was 
   await popup.locator("#query").fill("Второй");
   await popup.locator("#collect").click(); await h.waitFor(data => data.tasks?.length === 2 && data.run.status === "finished");
   assert.equal(h.tabs.size, 1); assert.equal(h.data.run.enrich, false);
-  await popup.locator("#export-xlsx").click(); await h.waitFor(() => h.downloads.length === 1);
-  assert.match(h.downloads[0].filename, /\.xlsx$/);
+  await popup.locator("#export-xlsx").click(); await h.waitFor(() => h.openedUi.length === 1);
+  assert.match(h.openedUi[0], /\/export\.html$/);
   popup.once("dialog", dialog => dialog.dismiss()); await popup.locator("#clear").click();
   assert.equal(h.data.tasks.length, 2);
   popup.once("dialog", dialog => dialog.accept()); await popup.locator("#clear").click();

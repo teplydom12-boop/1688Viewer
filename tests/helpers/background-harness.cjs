@@ -59,6 +59,7 @@ async function createHarness(browser, t) {
   await page.goto(initialUrl);
   const data = {};
   const downloads = [];
+  const openedUi = [];
   const observers = [];
   const alarms = new Map();
   let startupHandlers = [];
@@ -96,7 +97,7 @@ async function createHarness(browser, t) {
     tabs: {
       async get(id) { const target = tabs.get(id); if (!target) throw new Error("Tab closed"); return { id, url: target.url(), status: "complete" }; },
       async query(options) { return options?.active ? [{ id: 1, url: page.url(), status: "complete" }] : [...tabs].map(([id, target]) => ({ id, url: target.url(), status: "complete" })); },
-      async create({ url }) { const target = await context.newPage(); const id = nextTabId++; tabs.set(id, target); await preparePage(target); await target.goto(url); return { id, url, status: "complete" }; },
+      async create({ url }) { if (url.startsWith(chrome.runtime.getURL(""))) { openedUi.push(url); return { id: nextTabId++, url, status: "complete" }; } const target = await context.newPage(); const id = nextTabId++; tabs.set(id, target); await preparePage(target); await target.goto(url); return { id, url, status: "complete" }; },
       async update(id, options) { const target = tabs.get(id); if (options.url) await target.goto(options.url); if (options.active) await target.bringToFront(); return { id, url: target.url(), status: "complete" }; },
       async sendMessage(id, message) {
         if (!await tabs.get(id).evaluate(() => Boolean(globalThis.__contentMessages))) await tabs.get(id).evaluate(() => {
@@ -151,7 +152,7 @@ async function createHarness(browser, t) {
     throw new Error(`Background harness timed out: ${JSON.stringify(data.run)}`);
   }
   return {
-    context, page, command, waitFor, data, downloads, observers, initialUrl, flags, tabs, detailHtml, granted,
+    context, page, command, waitFor, data, downloads, openedUi, observers, initialUrl, flags, tabs, detailHtml, granted,
     idle: () => !vm.runInContext("processing || starting", sandbox),
     resume() { restart(); startupHandlers[0](); }
   };

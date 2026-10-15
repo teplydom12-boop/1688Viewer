@@ -155,7 +155,7 @@ $("reset-profile").addEventListener("click", () => { void action(() => send("RES
 $("resume-tab").addEventListener("click", () => { const access = authorizeSelected(); void action(async () => { await access; await send("RESUME", { tab_id: Number($("tab").value), interval_seconds: Number($("interval").value) }); }); });
 $("grant-required").addEventListener("click", () => { const access = grant(state.run.required_origin); void action(async () => { await access; await send("RESUME", { interval_seconds: Number($("interval").value) }); }); });
 $("finish-search").addEventListener("click", () => { void action(() => send("FINISH_SEARCH")); });
-for (const [id, format] of [["export-json", "json"], ["export-csv", "csv"], ["export-raw", "raw"], ["export-xlsx", "xlsx"]]) $(id).addEventListener("click", () => { void action(() => send("EXPORT", { format })); });
+for (const [id, format] of [["export-json", "json"], ["export-csv", "csv"], ["export-raw", "raw"], ["export-xlsx", "xlsx"]]) $(id).addEventListener("click", () => { void action(() => send(format === "xlsx" ? "OPEN_EXCEL" : "EXPORT", { format })); });
 $("filter").addEventListener("input", renderTable); $("source-filter").addEventListener("change", renderTable);
 $("task-filter").addEventListener("change", () => { void action(() => Promise.resolve()); });
 $("import").addEventListener("click", () => $("import-file").click());

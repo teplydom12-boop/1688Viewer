@@ -162,3 +162,52 @@ test("a second history tab updates if its selected check is deleted elsewhere, w
   assert.equal(h.data.tasks[0].id, second); assert.equal(await history.locator("#error").isHidden(), true);
   await history.reload(); await history.waitForFunction(() => document.querySelectorAll("#history-tasks tr").length === 1);
 });
+
+test("history thumbnails toggle with one click, persist across reloads and handle unavailable images", async t => {
+  const h = await createHarness(browser, t), { first, second } = await twoChecks(h);
+  h.data.tasks[0].products[0].image_url = "https://images.test/ok.png";
+  h.data.tasks[0].products[1].image_url = "https://images.test/missing.png";
+  let requests = 0;
+  await h.context.route("https://images.test/**", route => {
+    requests++;
+    return route.request().url().endsWith("ok.png") ? route.fulfill({ contentType: "image/png", body: fs.readFileSync(path.join(__dirname, "fixtures/thumbnail.png")) }) : route.fulfill({ status: 404, body: "missing" });
+  });
+  const history = await openHistory(h, first);
+  await history.waitForFunction(() => document.querySelectorAll("#memory-products tr").length === 2);
+  assert.equal(await history.locator("#memory-products img").count(), 0); assert.equal(requests, 0);
+  await history.locator("#toggle-images").click();
+  await history.waitForFunction(() => document.querySelector(".history-thumbnail")?.naturalWidth > 0 && document.querySelector(".image-unavailable"));
+  assert.equal(requests, 2); assert.equal(h.data.view_preferences.history_images, true);
+  assert.equal(await history.locator("#toggle-images").getAttribute("aria-pressed"), "true");
+  assert.equal(await history.locator("#memory-products a[data-image-key]").first().textContent(), "");
+  assert.equal(await history.locator(".history-thumbnail").getAttribute("referrerpolicy"), "no-referrer");
+  assert.equal(await history.locator(".history-thumbnail").evaluate(img => img.clientHeight), 48);
+  fs.mkdirSync(path.join(__dirname, "../test-results"), { recursive: true });
+  await history.screenshot({ path: path.join(__dirname, "../test-results/history-with-images.png"), fullPage: true });
+  await history.locator("#refresh").click();
+  await history.waitForFunction(() => document.getElementById("toggle-images").textContent === "Скрыть картинки");
+  assert.equal(requests, 2, "status refresh reuses thumbnails instead of downloading them again");
+  await history.reload(); await history.waitForFunction(() => document.querySelector(".history-thumbnail")?.naturalWidth > 0);
+  assert.equal(await history.locator("#toggle-images").textContent(), "Скрыть картинки");
+  await history.locator("#toggle-images").click(); await history.waitForFunction(() => document.querySelectorAll("#memory-products img").length === 0);
+  assert.equal(h.data.view_preferences.history_images, false);
+  assert.match(await history.locator("#memory-products").textContent(), /Открыть изображение/);
+  const before = requests;
+  await history.locator(`#history-tasks tr[data-task-id="${second}"] [data-action="open"]`).click();
+  await history.waitForFunction(() => document.getElementById("memory-title").textContent === "Термосы");
+  assert.equal(await history.locator("#memory-products img").count(), 0); assert.equal(requests, before);
+  assert.equal((await h.command("SET_VIEW", { history_images: "true" })).ok, false);
+  await h.command("CLEAR"); await history.waitForFunction(() => document.getElementById("task-memory").hidden);
+  assert.deepEqual(h.data, {});
+});
+
+test("selected Excel export opens the export screen for exactly the chosen historical check", async t => {
+  const h = await createHarness(browser, t), { first } = await twoChecks(h), history = await openHistory(h, first);
+  await history.waitForFunction(() => !document.getElementById("task-memory").hidden);
+  await history.locator("#export-task-xlsx").click(); await h.waitFor(() => h.openedUi.length === 1);
+  assert.equal(new URL(h.openedUi[0]).searchParams.get("task"), first);
+  const snapshot = await h.command("EXCEL_DATA", { task_id: first }, { id: "testextension", url: "chrome-extension://testextension/export.html?task=x" });
+  assert.equal(snapshot.ok, true); assert.equal(snapshot.result.total_tasks, 1);
+  assert.equal(snapshot.result.tasks[0].id, first); assert.equal(snapshot.result.products[0].price, "¥12.50");
+  assert.equal((await h.command("EXCEL_DATA", { task_id: "missing" })).ok, false);
+});

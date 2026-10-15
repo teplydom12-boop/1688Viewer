@@ -419,12 +419,12 @@ async function resumeRun(options = {}) {
   } finally { starting = false; }
 }
 async function getState(full = false) {
-  const { collection = emptyCollection(), run = null, preferences = null, last_navigation = null, tasks = [], profiles = {} } = await chrome.storage.local.get(["collection", "run", "preferences", "last_navigation", "tasks", "profiles"]);
+  const { collection = emptyCollection(), run = null, preferences = null, view_preferences = {}, last_navigation = null, tasks = [], profiles = {} } = await chrome.storage.local.get(["collection", "run", "preferences", "view_preferences", "last_navigation", "tasks", "profiles"]);
   const history = storedTasks(tasks, run, collection);
   const groups = S.supplierGroups(collection.products);
   const current = history.find(task => task.id === run?.id);
   const currentGroups = current ? S.supplierGroups(current.products) : null;
-  return { tasks: history.map(taskSummary).reverse(), task_count: history.length, can_clear: Boolean(history.length || collection.products.length || collection.raw_cards?.length || preferences || Object.keys(profiles).length || last_navigation), count: collection.products.length, page_count: collection.pages.filter(page => !page.partial).length,
+  return { view_preferences, tasks: history.map(taskSummary).reverse(), task_count: history.length, can_clear: Boolean(history.length || collection.products.length || collection.raw_cards?.length || preferences || Object.keys(view_preferences).length || Object.keys(profiles).length || last_navigation), count: collection.products.length, page_count: collection.pages.filter(page => !page.partial).length,
     supplier_count: groups.suppliers.length, unresolved_count: groups.unresolved.length, missing_names: collection.products.filter(item => !item.shop_name).length,
     raw_count: (collection.raw_cards || []).length, preview: collection.products.slice(-4).reverse(),
     current_task: current ? { product_count: current.products.length, supplier_count: currentGroups.suppliers.length, page_count: current.completed_pages, preview: current.products.slice(-4).reverse() } : null,
@@ -437,8 +437,7 @@ async function getTask(id) {
   if (!task) throw new Error("Задание не найдено. Возможно, память была очищена.");
   return { ...task, raw_count: collection.raw_cards.filter(card => card.task_id === id).length };
 }
-async function exportCollection(format = "json", taskId = null) {
-  if (!["json", "raw", "csv", "xlsx"].includes(format)) throw new Error("Неизвестный формат экспорта.");
+async function exportSnapshot(taskId = null, raw = false) {
   let { collection = emptyCollection(), tasks = [], run } = await chrome.storage.local.get(["collection", "tasks", "run"]);
   let history = storedTasks(tasks, run, collection);
   if (taskId != null) {
@@ -449,11 +448,15 @@ async function exportCollection(format = "json", taskId = null) {
   }
   if (!collection.products.length && !history.length) throw new Error("Сначала запустите задание или импортируйте товары.");
   const groups = S.supplierGroups(collection.products);
-  const output = { schema_version: 3, sources: [...new Set(collection.products.map(item => item.source))], exported_at: new Date().toISOString(), total_products: collection.products.length, total_suppliers: groups.suppliers.length,
+  return { schema_version: 3, sources: [...new Set(collection.products.map(item => item.source))], exported_at: new Date().toISOString(), total_products: collection.products.length, total_suppliers: groups.suppliers.length,
     tasks: history, total_tasks: history.length, pages: collection.pages, suppliers: groups.suppliers, unresolved_products: groups.unresolved, products: collection.products,
-    ...(format === "raw" ? { raw_cards: collection.raw_cards || [] } : {}) };
+    ...(raw ? { raw_cards: collection.raw_cards || [] } : {}) };
+}
+async function exportCollection(format = "json", taskId = null) {
+  if (!["json", "raw", "csv", "xlsx"].includes(format)) throw new Error("Неизвестный формат экспорта.");
+  const output = await exportSnapshot(taskId, format === "raw");
   const csv = format === "csv";
-  const url = format === "xlsx" ? globalThis.SupplierExcel.dataUrl(output) : `data:${csv ? "text/csv" : "application/json"};charset=utf-8,` + encodeURIComponent(csv ? S.csv(collection.products) : JSON.stringify(output, null, 2));
+  const url = format === "xlsx" ? globalThis.SupplierExcel.dataUrl(output) : `data:${csv ? "text/csv" : "application/json"};charset=utf-8,` + encodeURIComponent(csv ? S.csv(output.products) : JSON.stringify(output, null, 2));
   const downloadId = await chrome.downloads.download({ url, filename: `suppliers-${taskId == null ? "all" : "task"}-${format}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.${format === "xlsx" ? "xlsx" : csv ? "csv" : "json"}`, saveAs: true });
   return { download_id: downloadId };
 }
@@ -502,7 +505,7 @@ async function clearCollection() {
     const { run } = await chrome.storage.local.get("run");
     if (run?.status === "running" || processing || starting) throw new Error("Приостановите работу и дождитесь остановки перед очисткой.");
     await chrome.alarms.clear(ALARM);
-    await chrome.storage.local.remove(["collection", "run", "tasks", "unassigned_memory", "preferences", "profiles", "last_navigation", "pending_pick"]); return { cleared: true };
+    await chrome.storage.local.remove(["collection", "run", "tasks", "unassigned_memory", "preferences", "view_preferences", "profiles", "last_navigation", "pending_pick"]); return { cleared: true };
   });
 }
 async function listTabs() { return (await chrome.tabs.query({})).filter(tab => S.webUrl(tab.url || "") && !S.productUrl(tab.url)).map(tab => ({ id: tab.id, url: tab.url, title: tab.title || new URL(tab.url).hostname, source: S.site(tab.url) })); }
@@ -570,7 +573,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       await persistState({ run: logEntry({ ...run, current_count: Math.max(0, Number(detail.count) || 0) }, S.text(detail.stage)?.slice(0, 40) || "loading", S.text(detail.message)?.slice(0, 500) || "Обрабатываю страницу…") });
     }); respond({ ok: true }); return;
   }
-  if (!["popup.html", "dashboard.html", "history.html"].map(file => chrome.runtime.getURL(file)).includes(sender.url?.split(/[?#]/)[0])) return;
+  if (!["popup.html", "dashboard.html", "history.html", "export.html"].map(file => chrome.runtime.getURL(file)).includes(sender.url?.split(/[?#]/)[0])) return;
   const operations = {
     STATE: () => getState(false), DATA: () => getState(true), TASK: () => getTask(message.options?.id), TABS: listTabs,
     START: () => startRun(message.options || {}), ENRICH: () => startRun(message.options || {}, true),
@@ -579,6 +582,13 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     RESET_PROFILE: async () => { const tab = await selectedTab(message.options); return withStateLock(async () => { const { profiles = {} } = await chrome.storage.local.get("profiles"); delete profiles[new URL(tab.url).origin]; await chrome.storage.local.set({ profiles, last_navigation: null }); return {}; }); },
     PAUSE: () => pauseRun(), STOP: () => pauseRun("stopped"), RESUME: () => resumeRun(message.options || {}),
     EXPORT: () => exportCollection(message.options?.format || "json", message.options?.task_id ?? null), IMPORT: () => importCollection(message.options?.data),
+    EXCEL_DATA: () => exportSnapshot(message.options?.task_id ?? null),
+    OPEN_EXCEL: async () => { await chrome.tabs.create({ url: chrome.runtime.getURL("export.html") + (message.options?.task_id ? `?task=${encodeURIComponent(message.options.task_id)}` : "") }); return {}; },
+    SET_VIEW: () => withStateLock(async () => {
+      if (typeof message.options?.history_images !== "boolean") throw new Error("Некорректный режим отображения.");
+      const { view_preferences = {} } = await chrome.storage.local.get("view_preferences");
+      await chrome.storage.local.set({ view_preferences: { ...view_preferences, history_images: message.options.history_images } }); return {};
+    }),
     RAW: async () => (await chrome.storage.local.get("collection")).collection?.raw_cards || [],
     OPEN_DASHBOARD: async () => { await chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") }); return {}; },
     OPEN_HISTORY: async () => { await chrome.tabs.create({ url: chrome.runtime.getURL("history.html") }); return {}; },

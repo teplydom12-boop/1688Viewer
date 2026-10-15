@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Supplier Viewer — экспорт Excel</title><link rel="stylesheet" href="dashboard.css"><link rel="stylesheet" href="export.css"></head>
+<body>
+  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>Экспорт Excel</small></div></div><a href="history.html" class="local">История проверок</a><span class="version">0.8</span></header>
+  <main class="export-workspace">
+    <h1>Excel с картинками</h1>
+    <p id="summary" class="muted">Подготавливаю данные…</p>
+    <p>Миниатюры помещаются в границы ячеек и сохраняются внутри файла. В Excel 2016, 2019 и 2021 нажмите <strong>− над столбцом с фото</strong>, чтобы скрыть картинки, и <strong>+</strong>, чтобы вернуть их. На листах «Товары» и «Товары заданий» переключатели отдельные.</p>
+    <label class="image-option"><input id="include-images" type="checkbox" checked> Включить компактные картинки в файл</label>
+    <p class="muted">Для загрузки картинок Chrome может запросить доступ к сайтам, где они хранятся. Загружаются только изображения; обработка идёт в браузере. Недоступные картинки заменяются пометкой, исходные ссылки остаются в таблице.</p>
+    <div class="exports"><button id="download" class="primary" disabled>Сохранить Excel</button><button id="cancel" hidden>Отменить подготовку</button></div>
+    <progress id="progress" max="1" value="0" hidden aria-label="Подготовка Excel"></progress>
+    <p id="status" role="status" aria-live="polite"></p><p id="error" class="error" role="alert" hidden></p>
+  </main>
+  <script src="images.js"></script><script src="excel.js"></script><script src="export.js"></script>
+</body>
+</html>

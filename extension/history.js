@@ -45,10 +45,26 @@ function renderMemory() {
   $("memory-counts").textContent = `Товаров: ${selected.products.length} · Страниц: ${selected.completed_pages}/${selected.max_pages} · Исходных карточек: ${selected.raw_count || 0}`;
   $("memory-empty").hidden = Boolean(selected.products.length);
   $("delete-task").disabled = state.run?.status === "running";
+  const showImages = state.view_preferences?.history_images === true;
+  $("toggle-images").textContent = showImages ? "Скрыть картинки" : "Показать картинки";
+  $("toggle-images").setAttribute("aria-pressed", String(showImages));
+  const thumbnails = new Map([...$("memory-products").querySelectorAll("[data-image-key]")].map(node => [node.dataset.imageKey, node]));
   $("memory-products").replaceChildren(...selected.products.map(product => {
     const row = element("tr"), name = element("td"); name.append(link(product.product_url, product.title || "Название не получено"), element("small", `ID: ${product.product_id}`, "supplier-id"));
     const supplier = element("td"); supplier.append(link(product.supplier_url, product.shop_name || "Имя магазина не получено"), element("small", product.supplier_id || "", "supplier-id"));
-    const image = element("td"); image.append(product.image_url ? link(product.image_url, "Открыть изображение ↗") : element("span", "—"));
+    const image = element("td");
+    if (showImages && SupplierCollector.webUrl(product.image_url)) {
+      const key = `${product.source}:${product.product_id}:${product.image_url}`;
+      let thumbnail = thumbnails.get(key);
+      if (!thumbnail) {
+        thumbnail = link(product.image_url, ""); thumbnail.dataset.imageKey = key;
+        const img = element("img", null, "history-thumbnail"); img.width = 48; img.height = 48; img.alt = product.title || "Изображение товара";
+        img.loading = "lazy"; img.decoding = "async"; img.referrerPolicy = "no-referrer";
+        img.addEventListener("error", () => { img.remove(); thumbnail.append(element("span", "Картинка недоступна ↗", "image-unavailable")); }, { once: true });
+        img.src = product.image_url; thumbnail.replaceChildren(img);
+      }
+      image.append(thumbnail);
+    } else image.append(product.image_url ? link(product.image_url, "Открыть изображение ↗") : element("span", "—"));
     row.append(name, element("td", product.price || "—"), element("td", product.minimum_order || "—"), supplier, image, element("td", date(product.last_seen_at || product.collected_at))); return row;
   }));
   $("memory-pages").replaceChildren(...selected.pages.map(page => { const item = element("li"); item.append(link(page.page_url, `${page.query || "Выдача"}${page.partial ? " · частично сохранена" : ""}`)); return item; }));
@@ -87,12 +103,13 @@ function requestDelete(id) {
 $("history-filter").addEventListener("input", renderList);
 $("refresh").addEventListener("click", () => { void action(() => Promise.resolve()); });
 $("delete-task").addEventListener("click", () => requestDelete(selectedId));
-for (const [id, format, scoped] of [["export-all-json", "json", false], ["export-all-xlsx", "xlsx", false], ["export-task-json", "json", true], ["export-task-xlsx", "xlsx", true], ["export-task-raw", "raw", true]]) $(id).addEventListener("click", () => { void action(() => send("EXPORT", { format, ...(scoped ? { task_id: selectedId } : {}) })); });
+$("toggle-images").addEventListener("click", () => { void action(() => send("SET_VIEW", { history_images: state.view_preferences?.history_images !== true })); });
+for (const [id, format, scoped] of [["export-all-json", "json", false], ["export-all-xlsx", "xlsx", false], ["export-task-json", "json", true], ["export-task-xlsx", "xlsx", true], ["export-task-raw", "raw", true]]) $(id).addEventListener("click", () => { void action(() => send(format === "xlsx" ? "OPEN_EXCEL" : "EXPORT", { format, ...(scoped ? { task_id: selectedId } : {}) })); });
 $("clear-all").addEventListener("click", () => {
   if (confirm("Удалить всю память приложения: все проверки, товары, исходные карточки, журналы, настройки и образцы сайтов? Действие необратимо. Сначала сохраните JSON или Excel.")) void action(async () => {
     await send("CLEAR"); selectedId = ""; $("history-filter").value = ""; history.replaceState(null, "", location.pathname); $("notice").textContent = "Вся память приложения удалена.";
   });
 });
 window.addEventListener("hashchange", () => { selectedId = location.hash.slice(1); void refresh().catch(showError); });
-chrome.storage.onChanged.addListener((changes, area) => { if (area === "local" && ["tasks", "run", "collection", "preferences", "profiles"].some(key => changes[key])) void refresh().catch(showError); });
+chrome.storage.onChanged.addListener((changes, area) => { if (area === "local" && ["tasks", "run", "collection", "preferences", "profiles", "view_preferences"].some(key => changes[key])) void refresh().catch(showError); });
 void refresh().catch(showError);

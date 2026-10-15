@@ -91,7 +91,7 @@ $("resume").addEventListener("click", () => { void action(() => send("RESUME", {
 $("dashboard").addEventListener("click", () => { void action(() => send("OPEN_DASHBOARD")); });
 $("history").addEventListener("click", () => { void action(() => send("OPEN_HISTORY")); });
 $("export").addEventListener("click", () => { void action(() => send("EXPORT")); });
-$("export-xlsx").addEventListener("click", () => { void action(() => send("EXPORT", { format: "xlsx" })); });
+$("export-xlsx").addEventListener("click", () => { void action(() => send("OPEN_EXCEL")); });
 $("clear").addEventListener("click", () => {
   if (confirm("Обнулить всю память приложения: товары, исходные карточки, задания, журнал, настройки и образцы сайтов? Действие необратимо. Сначала сохраните JSON или Excel.")) void action(async () => { await send("CLEAR"); $("collect-form").reset(); initialized = false; });
 });
