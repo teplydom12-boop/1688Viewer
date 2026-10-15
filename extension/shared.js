@@ -133,7 +133,7 @@
         for (const [field, value] of Object.entries(item)) {
           const samePass = old.last_seen_at === (item.last_seen_at || item.collected_at);
           const weaker = samePass && (old.field_confidence?.[field] || 0) > (item.field_confidence?.[field] || 0);
-          if (value !== null && value !== "" && value !== undefined && !["collected_at", "sightings", "field_sources", "field_confidence"].includes(field) && !weaker) merged[field] = value;
+          if (value !== null && value !== "" && value !== undefined && !["collected_at", "sightings", "task_ids", "field_sources", "field_confidence"].includes(field) && !weaker) merged[field] = value;
         }
       }
       merged.field_sources = { ...(old?.field_sources || {}) };
@@ -145,6 +145,7 @@
           merged.field_confidence[field] = item.field_confidence?.[field] || 0;
         }
       }
+      if (old?.task_ids || item.task_ids) merged.task_ids = [...new Set([...(old?.task_ids || []), ...(item.task_ids || [])])];
       merged.last_seen_at = item.last_seen_at || item.collected_at;
       const initialSightings = old ? old.sightings || [{
         query: old.query, search_type: old.search_type, source_page_url: old.source_page_url

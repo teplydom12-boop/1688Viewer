@@ -39,6 +39,7 @@ button:disabled { opacity: .45; cursor: default; }
 .preview a:hover { text-decoration: underline; }
 .preview small { display: block; margin-top: 4px; color: #8a8277; font-size: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 #export { flex: 1; }
+progress { width: 100%; height: 7px; accent-color: #eb5e21; }.export-row { flex-wrap: wrap; }#clear { width: 100%; }
 .quiet { border-color: transparent; background: transparent; font-weight: 400; color: #8a8277; }
 .footer { color: #92897c; font-size: 10px; line-height: 1.5; margin: 13px 0 0; }
 .dashboard-link { width: 100%; margin-bottom: 13px; color: #b84c1d; font-size: 11px; }

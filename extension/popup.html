@@ -10,11 +10,11 @@
   <header>
     <span class="brand-mark" aria-hidden="true">SV</span>
     <div><h1>Сбор поставщиков</h1><p>Сайты с карточками товаров</p></div>
-    <span class="version">0.4</span>
+    <span class="version">0.5</span>
   </header>
 
   <main>
-    <button id="dashboard" class="dashboard-link" type="button">Открыть таблицу поставщиков и журнал ↗</button>
+    <button id="dashboard" class="dashboard-link" type="button">Открыть задания и накопленные результаты ↗</button>
     <div class="intro">Выполните поиск на маркетплейсе. Сбор работает в открытой вкладке.</div>
     <form id="collect-form">
       <label for="query">Название поиска <span>необязательно</span></label>
@@ -25,20 +25,20 @@
         <div><label for="interval">Пауза, сек.</label><input id="interval" type="number" min="1" max="30" value="3" required></div>
       </div>
       <label class="checkbox"><input id="scroll" type="checkbox" checked><span>Догружать выдачу прокруткой</span></label>
-      <label class="checkbox"><input id="enrich" type="checkbox" checked><span>Получать магазины из карточек товаров</span></label>
       <label class="checkbox"><input id="responses" type="checkbox"><span>Дополнять данные из ответов сайта</span></label>
       <label class="checkbox"><input id="raw" type="checkbox" checked><span>Сохранять исходные карточки</span></label>
-      <div class="action-row"><button id="collect" class="primary" type="submit">Собрать выдачу</button><button id="stop" type="button" disabled>Пауза</button><button id="resume" type="button" disabled>Продолжить</button></div>
+      <div class="action-row"><button id="collect" class="primary" type="submit">Запустить задание</button><button id="stop" type="button" disabled>Пауза</button><button id="resume" type="button" disabled>Продолжить</button></div>
     </form>
 
     <section class="collection" aria-label="Сохранённые данные">
       <button id="show-tab" type="button" hidden>Открыть рабочую вкладку / капчу</button>
       <div class="stats"><div><strong id="count">0</strong><span>товаров</span></div><div><strong id="supplier-count">0</strong><span>поставщиков</span></div><div><strong id="page-count">0</strong><span>страниц</span></div><span id="badge">Готов к сбору</span></div>
       <p id="status" role="status" aria-live="polite">Результаты сохраняются между запусками.</p>
+      <progress id="progress" max="100" value="0" aria-label="Прогресс текущего задания"></progress><p id="progress-label" class="hint"></p><p id="task-count" class="hint">Заданий в памяти: 0</p>
       <p id="error" class="error" role="alert" hidden></p>
       <ul id="warnings" class="warnings" hidden></ul>
       <ul id="preview" class="preview"></ul>
-      <div class="export-row"><button id="export" type="button" disabled>Скачать JSON</button><button id="clear" class="quiet" type="button" disabled>Очистить</button></div>
+      <div class="export-row"><button id="export" type="button" disabled>JSON</button><button id="export-xlsx" type="button" disabled>Excel (.xlsx)</button><button id="clear" class="quiet" type="button" disabled>Обнулить память</button></div>
     </section>
     <p class="footer">Недоступные поля остаются пустыми. При капче откройте рабочую вкладку из таблицы и пройдите проверку вручную.</p>
   </main>

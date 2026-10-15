@@ -1,6 +1,7 @@
 "use strict";
 importScripts("shared.js");
 importScripts("page-data.js");
+importScripts("excel.js");
 const S = globalThis.SupplierCollector;
 const ALARM = "1688-collector-progress";
 const RESPONSE_SCRIPT = "supplier-observed-responses";
@@ -9,6 +10,40 @@ let processing = false, starting = false, stateQueue = Promise.resolve();
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const emptyCollection = () => ({ products: [], pages: [], raw_cards: [] });
 const productKey = item => `${item.source}:${item.product_id}`;
+// History holds each task's own observations; the collection holds the merged memory.
+function taskRecord(run, previous = {}) {
+  const record = { ...previous };
+  for (const field of ["id", "kind", "query", "source", "source_url", "started_at", "updated_at", "finished_at", "status", "phase", "stage", "message", "pause_reason", "completed_pages", "max_pages", "detail_index", "detail_total", "current_count", "log"]) record[field] = run[field] ?? null;
+  return { ...record, products: previous.products || [], pages: previous.pages || [] };
+}
+function storedTasks(tasks = [], run, collection = emptyCollection()) {
+  if (!run || tasks.some(task => task.id === run.id)) return tasks;
+  const keys = new Set(run.product_keys || []);
+  return [...tasks, taskRecord(run, { products: collection.products.filter(item => keys.has(productKey(item))), pages: collection.pages.filter(page => page.checkpoint?.startsWith(`${run.id}:`)) })];
+}
+// Called inside withStateLock, so task snapshots and the current run change atomically.
+async function persistState(values, result = null, partial = false) {
+  const stored = await chrome.storage.local.get(["tasks", "run"]);
+  // Read old raw-card memory only once when migrating a pre-history run.
+  if (stored.run && !stored.tasks?.some(task => task.id === stored.run.id)) stored.collection = (await chrome.storage.local.get("collection")).collection;
+  let tasks = storedTasks(stored.tasks, stored.run, stored.collection);
+  const run = values.run;
+  if (run) {
+    if (stored.run && stored.run.id !== run.id) tasks = tasks.map(task => task.id === stored.run.id && ["paused", "stopped"].includes(task.status) ? { ...task, status: "stopped", finished_at: new Date().toISOString(), message: "Сохранено в истории перед запуском нового задания." } : task);
+    const index = tasks.findIndex(task => task.id === run.id);
+    let record = taskRecord(run, tasks[index]);
+    if (result) {
+      const merged = mergeResult({ products: record.products, pages: record.pages, raw_cards: [] }, result, partial, `${run.id}:${partial ? run.completed_pages : run.completed_pages - 1}`);
+      record = { ...record, products: merged.products, pages: merged.pages };
+    }
+    if (index < 0) tasks = [...tasks, record]; else tasks = tasks.map((task, position) => position === index ? record : task);
+  }
+  await chrome.storage.local.set({ ...values, tasks });
+}
+function taskSummary(task) {
+  const { products, pages, log, ...summary } = task;
+  return { ...summary, product_count: products.length, page_count: pages.filter(page => !page.partial).length, partial_page_count: pages.filter(page => page.partial).length };
+}
 function detailQueue(products) {
   const candidates = products.filter(item => item.product_url && (!item.shop_name || !item.supplier_url)).sort((a, b) => Boolean(a.detail_checked_at) - Boolean(b.detail_checked_at));
   const groups = new Map();
@@ -24,7 +59,7 @@ function logEntry(run, stage, message) {
   return { ...run, stage, message, updated_at: new Date().toISOString(), log: [...(run.log || []), { at: new Date().toISOString(), stage, message }].slice(-100) };
 }
 async function updateRun(id, change) {
-  return withStateLock(async () => { const run = await activeRun(id); if (!run) return null; const next = change(run); await chrome.storage.local.set({ run: next }); return next; });
+  return withStateLock(async () => { const run = await activeRun(id); if (!run) return null; const next = change(run); await persistState({ run: next }); return next; });
 }
 async function sendToTab(tabId, type, options) {
   const tab = await chrome.tabs.get(tabId);
@@ -85,7 +120,7 @@ async function finish(id, status, message, reason = null) {
   await withStateLock(async () => {
     const run = await activeRun(id); if (!run) return;
     stopped = run;
-    await chrome.storage.local.set({ run: { ...logEntry(run, status, message), status, pause_reason: reason } });
+    await persistState({ run: { ...logEntry(run, status, message), status, pause_reason: reason, ...(status === "finished" ? { finished_at: new Date().toISOString() } : {}) } });
     await chrome.alarms.clear(ALARM);
   });
   await stopResponseObservation(stopped);
@@ -101,11 +136,12 @@ async function waitForTab(tabId, id) {
 }
 function mergeResult(collection, result, partial, checkpoint) {
   const products = S.mergeProducts(collection.products, result.products);
-  const raw = new Map((collection.raw_cards || []).map(card => [`${card.source}:${card.product_id}:${card.source_page_url}`, card]));
-  for (const card of result.raw_cards || []) raw.set(`${card.source}:${card.product_id}:${card.source_page_url}`, card);
+  const rawKey = card => `${card.source}:${card.product_id}:${card.source_page_url}:${card.task_id || "legacy"}`;
+  const raw = new Map((collection.raw_cards || []).map(card => [rawKey(card), card]));
+  for (const card of result.raw_cards || []) raw.set(rawKey(card), card);
   let pages = collection.pages || [];
   if (result.page) {
-    pages = pages.filter(page => page.checkpoint !== checkpoint && !(page.page_url === result.page.page_url && page.query === result.page.query && page.fingerprint === result.page.fingerprint));
+    pages = pages.filter(page => page.checkpoint !== checkpoint && !(page.task_id === result.page.task_id && page.page_url === result.page.page_url && page.query === result.page.query && page.fingerprint === result.page.fingerprint));
     pages.push({ ...result.page, partial, checkpoint });
   }
   return { products, pages, raw_cards: [...raw.values()] };
@@ -114,12 +150,13 @@ async function saveSearch(id, result, partial = false) {
   return withStateLock(async () => {
     const { run, collection = emptyCollection() } = await chrome.storage.local.get(["run", "collection"]);
     if (run?.id !== id || (!partial && run.status !== "running")) return null;
+    result = { ...result, products: result.products.map(item => ({ ...item, task_ids: [id] })), page: result.page ? { ...result.page, task_id: id } : null, raw_cards: (result.raw_cards || []).map(card => ({ ...card, task_id: id })) };
     if (!partial && run.seen_fingerprints.includes(result.page.fingerprint)) throw new Error("Повторилась уже собранная выдача. Проверьте страницу и продолжите сбор.");
     const merged = mergeResult(collection, result, partial, `${id}:${run.completed_pages}`);
     const keys = [...new Set([...(run.product_keys || []), ...result.products.map(productKey)])];
     let next = { ...run, product_keys: keys };
     if (!partial) next = logEntry({ ...next, completed_pages: run.completed_pages + 1, previous_fingerprint: result.page.fingerprint, seen_fingerprints: [...run.seen_fingerprints, result.page.fingerprint], phase: "navigate" }, "saved", `Сохранена страница ${run.completed_pages + 1}: ${result.products.length} товаров. Всего: ${merged.products.length}.`);
-    await chrome.storage.local.set({ collection: merged, run: next });
+    await persistState({ collection: merged, run: next }, result, partial);
     return { run: next, count: merged.products.length };
   });
 }
@@ -152,8 +189,8 @@ async function detailStep(run) {
   await withStateLock(async () => {
     const current = await activeRun(run.id); if (!current) return;
     const { collection: latest = emptyCollection() } = await chrome.storage.local.get("collection");
-    const matched = result.products.filter(product => productKey(product) === key);
-    if (!matched.length && String(item.source).startsWith("web:") && result.products.length === 1) matched.push({ ...result.products[0], canonical_detail_url: result.products[0].product_url, source: item.source, product_id: item.product_id, product_url: item.product_url });
+    const matched = result.products.filter(product => productKey(product) === key).map(product => ({ ...product, task_ids: [run.id] }));
+    if (!matched.length && String(item.source).startsWith("web:") && result.products.length === 1) matched.push({ ...result.products[0], canonical_detail_url: result.products[0].product_url, source: item.source, product_id: item.product_id, product_url: item.product_url, task_ids: [run.id] });
     let products = S.mergeProducts(latest.products, matched);
     const found = products.find(product => productKey(product) === key);
     if (found && (found.shop_name || found.supplier_url)) products = products.map(product => {
@@ -164,7 +201,7 @@ async function detailStep(run) {
       return copy;
     });
     const message = found?.shop_name ? `Получен магазин: ${found.shop_name}.` : `У товара ${item.product_id} имя магазина не найдено; данные не выдумываются.`;
-    await chrome.storage.local.set({ collection: { ...latest, products }, run: logEntry({ ...current, detail_index: current.detail_index + 1 }, "detail-saved", message) });
+    await persistState({ collection: { ...latest, products }, run: logEntry({ ...current, detail_index: current.detail_index + 1 }, "detail-saved", message) }, { products: found && matched.length ? [{ ...found, task_ids: [run.id] }] : [] }, true);
   });
   await delay(run.interval_ms);
 }
@@ -288,14 +325,15 @@ async function startRun(options, detailsOnly = false) {
     if (detailsOnly && !queue.length) throw new Error("Нет товаров с недостающими данными магазина. Сначала соберите или импортируйте выдачу.");
     const run = logEntry({
       id: crypto.randomUUID(), status: "running", phase: detailsOnly ? "details" : "search", tab_id: tab?.id || null,
-      max_pages: maxPages, completed_pages: 0, query: S.text(options.query), scroll: options.scroll !== false,
+      kind: detailsOnly ? "details" : "collection", source: tab ? S.site(tab.url) : null, source_url: tab?.url || null,
+      max_pages: maxPages, completed_pages: 0, query: S.text(options.query) || (tab ? S.detectSearch(tab.url).query : null), scroll: options.scroll !== false,
       raw: options.raw !== false, enrich: options.enrich === true, interval_ms: interval * 1000,
       observe_responses: options.observe_responses === true,
       previous_fingerprint: null, seen_fingerprints: [], product_keys: [],
       detail_queue: detailsOnly ? queue : [], detail_index: 0, detail_total: detailsOnly ? queue.length : 0,
       started_at: new Date().toISOString(), pause_reason: null, log: []
     }, detailsOnly ? "details" : "loading", detailsOnly ? `Проверю ${queue.length} карточек товаров.` : "Ожидаю товары и собираю выдачу…");
-    await withStateLock(async () => { await chrome.storage.local.set({ run, last_navigation: null, preferences: { max_pages: maxPages, query: run.query || "", scroll: run.scroll, raw: run.raw, enrich: run.enrich, observe_responses: run.observe_responses, interval_seconds: interval } }); await chrome.alarms.create(ALARM, { periodInMinutes: 0.5 }); });
+    await withStateLock(async () => { await persistState({ run, last_navigation: null, preferences: { max_pages: maxPages, query: run.query || "", scroll: run.scroll, raw: run.raw, enrich: run.enrich, observe_responses: run.observe_responses, interval_seconds: interval } }); await chrome.alarms.create(ALARM, { periodInMinutes: 0.5 }); });
     void processRun();
     return { started: true };
   } finally { starting = false; }
@@ -303,7 +341,7 @@ async function startRun(options, detailsOnly = false) {
 async function pauseRun(status = "paused") {
   const paused = await withStateLock(async () => {
     const { run } = await chrome.storage.local.get("run"); if (run?.status !== "running") return null;
-    await chrome.storage.local.set({ run: { ...logEntry(run, status, "Работа приостановлена. Данные сохранены; можно продолжить с текущего этапа."), status, pause_reason: "manual" } });
+    await persistState({ run: { ...logEntry(run, status, "Работа приостановлена. Данные сохранены; можно продолжить с текущего этапа."), status, pause_reason: "manual" } });
     await chrome.alarms.clear(ALARM); return run;
   });
   if (paused) for (const tabId of [paused.tab_id, paused.detail_tab_id].filter(id => id != null)) {
@@ -335,29 +373,38 @@ async function resumeRun(options = {}) {
       reloadForResponses = !peek.products.length;
     }
   }
-  await withStateLock(async () => { await chrome.storage.local.set({ run: { ...logEntry(run, run.phase, "Продолжаю с сохранённого этапа…"), status: "running", pause_reason: null, required_origin: null, interval_ms: interval * 1000 } }); });
+  await withStateLock(async () => { await persistState({ run: { ...logEntry(run, run.phase, "Продолжаю с сохранённого этапа…"), status: "running", pause_reason: null, required_origin: null, interval_ms: interval * 1000 } }); });
   if (reloadForResponses) { const tab = await chrome.tabs.get(tabId); await registerResponseScripts(tab.url); await chrome.tabs.update(tabId, { url: tab.url }); }
   void processRun(); return { resumed: true };
 }
 async function getState(full = false) {
-  const { collection = emptyCollection(), run = null, preferences = null, last_navigation = null } = await chrome.storage.local.get(["collection", "run", "preferences", "last_navigation"]);
+  const { collection = emptyCollection(), run = null, preferences = null, last_navigation = null, tasks = [], profiles = {} } = await chrome.storage.local.get(["collection", "run", "preferences", "last_navigation", "tasks", "profiles"]);
+  const history = storedTasks(tasks, run, collection);
   const groups = S.supplierGroups(collection.products);
-  return { count: collection.products.length, page_count: collection.pages.filter(page => !page.partial).length,
+  return { tasks: history.map(taskSummary).reverse(), task_count: history.length, can_clear: Boolean(history.length || collection.products.length || collection.raw_cards?.length || preferences || Object.keys(profiles).length || last_navigation), count: collection.products.length, page_count: collection.pages.filter(page => !page.partial).length,
     supplier_count: groups.suppliers.length, unresolved_count: groups.unresolved.length, missing_names: collection.products.filter(item => !item.shop_name).length,
     raw_count: (collection.raw_cards || []).length, preview: collection.products.slice(-4).reverse(),
     warnings: collection.pages.at(-1)?.warnings || [], run, preferences, navigation: last_navigation?.analysis || run?.navigation || null,
     ...(full ? { products: collection.products, suppliers: groups.suppliers, unresolved: groups.unresolved } : {}) };
 }
+async function getTask(id) {
+  const { tasks = [], run, collection = emptyCollection() } = await chrome.storage.local.get(["tasks", "run", "collection"]);
+  const task = storedTasks(tasks, run, collection).find(item => item.id === id);
+  if (!task) throw new Error("Задание не найдено. Возможно, память была очищена.");
+  return task;
+}
 async function exportCollection(format = "json") {
-  const { collection = emptyCollection() } = await chrome.storage.local.get("collection");
-  if (!collection.products.length) throw new Error("Сначала соберите или импортируйте товары.");
+  if (!["json", "raw", "csv", "xlsx"].includes(format)) throw new Error("Неизвестный формат экспорта.");
+  const { collection = emptyCollection(), tasks = [], run } = await chrome.storage.local.get(["collection", "tasks", "run"]);
+  const history = storedTasks(tasks, run, collection);
+  if (!collection.products.length && !history.length) throw new Error("Сначала запустите задание или импортируйте товары.");
   const groups = S.supplierGroups(collection.products);
   const output = { schema_version: 3, sources: [...new Set(collection.products.map(item => item.source))], exported_at: new Date().toISOString(), total_products: collection.products.length, total_suppliers: groups.suppliers.length,
-    pages: collection.pages, suppliers: groups.suppliers, unresolved_products: groups.unresolved, products: collection.products,
+    tasks: history, total_tasks: history.length, pages: collection.pages, suppliers: groups.suppliers, unresolved_products: groups.unresolved, products: collection.products,
     ...(format === "raw" ? { raw_cards: collection.raw_cards || [] } : {}) };
   const csv = format === "csv";
-  const url = `data:${csv ? "text/csv" : "application/json"};charset=utf-8,` + encodeURIComponent(csv ? S.csv(collection.products) : JSON.stringify(output, null, 2));
-  const downloadId = await chrome.downloads.download({ url, filename: `suppliers-${format}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.${csv ? "csv" : "json"}`, saveAs: true });
+  const url = format === "xlsx" ? globalThis.SupplierExcel.dataUrl(output) : `data:${csv ? "text/csv" : "application/json"};charset=utf-8,` + encodeURIComponent(csv ? S.csv(collection.products) : JSON.stringify(output, null, 2));
+  const downloadId = await chrome.downloads.download({ url, filename: `suppliers-${format}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.${format === "xlsx" ? "xlsx" : csv ? "csv" : "json"}`, saveAs: true });
   return { download_id: downloadId };
 }
 async function importCollection(input) {
@@ -366,7 +413,7 @@ async function importCollection(input) {
     if (processing || starting || run?.status === "running") throw new Error("Приостановите работу перед импортом.");
     const imported = S.importProducts(input);
     const products = S.mergeProducts(collection.products, imported);
-    const raw = new Map((collection.raw_cards || []).map(card => [`${card.source}:${card.product_id}:${card.source_page_url}`, card]));
+    const raw = new Map((collection.raw_cards || []).map(card => [`${card.source}:${card.product_id}:${card.source_page_url}:${card.task_id || "legacy"}`, card]));
     const keys = new Set(imported.map(productKey));
     if (Array.isArray(input.raw_cards) && input.raw_cards.length <= 10000) for (const card of input.raw_cards) {
       const source = card?.source || S.site(card?.source_page_url);
@@ -374,7 +421,7 @@ async function importCollection(input) {
         const safe = { source, product_id: String(card.product_id), source_page_url: card.source_page_url, html: card.html, collected_at: new Date().toISOString() };
         if (!S.webUrl(safe.source_page_url)) continue;
         if (card.record) try { const parsed = S.importProducts({ products: [card.record] })[0]; if (productKey(parsed) === `${source}:${safe.product_id}`) safe.record = parsed; } catch { /* preserve inert markup, discard malformed business record */ }
-        raw.set(`${safe.source}:${safe.product_id}:${safe.source_page_url}`, safe);
+        raw.set(`${safe.source}:${safe.product_id}:${safe.source_page_url}:legacy`, safe);
       }
     }
     await chrome.storage.local.set({ collection: { ...collection, products, raw_cards: [...raw.values()] } });
@@ -385,7 +432,8 @@ async function clearCollection() {
   return withStateLock(async () => {
     const { run } = await chrome.storage.local.get("run");
     if (run?.status === "running" || processing || starting) throw new Error("Приостановите работу и дождитесь остановки перед очисткой.");
-    await chrome.storage.local.remove(["collection", "run"]); return { cleared: true };
+    await chrome.alarms.clear(ALARM);
+    await chrome.storage.local.remove(["collection", "run", "tasks", "preferences", "profiles", "last_navigation", "pending_pick"]); return { cleared: true };
   });
 }
 async function listTabs() { return (await chrome.tabs.query({})).filter(tab => S.webUrl(tab.url || "") && !S.productUrl(tab.url)).map(tab => ({ id: tab.id, url: tab.url, title: tab.title || new URL(tab.url).hostname, source: S.site(tab.url) })); }
@@ -410,7 +458,7 @@ async function chooseNavigation(options) {
   await chrome.storage.local.set({ last_navigation: { tab_id: tab.id, origin: new URL(tab.url).origin, analysis: learned } });
   await withStateLock(async () => {
     const { run } = await chrome.storage.local.get("run");
-    if (run && ["paused", "stopped"].includes(run.status) && run.phase !== "details" && run.tab_id === tab.id) await chrome.storage.local.set({ run: { ...run, navigation: analysis, chosen_navigation: candidate.id } });
+    if (run && ["paused", "stopped"].includes(run.status) && run.phase !== "details" && run.tab_id === tab.id) await persistState({ run: { ...run, navigation: analysis, chosen_navigation: candidate.id } });
   }); return { chosen: candidate.label };
 }
 async function enablePicker(options) {
@@ -450,15 +498,15 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const { run } = await chrome.storage.local.get("run");
       if (run?.status !== "running" || ![run.tab_id, run.detail_tab_id].includes(sender.tab.id)) return;
       const detail = message.detail || {};
-      await chrome.storage.local.set({ run: logEntry({ ...run, current_count: Math.max(0, Number(detail.count) || 0) }, S.text(detail.stage)?.slice(0, 40) || "loading", S.text(detail.message)?.slice(0, 500) || "Обрабатываю страницу…") });
+      await persistState({ run: logEntry({ ...run, current_count: Math.max(0, Number(detail.count) || 0) }, S.text(detail.stage)?.slice(0, 40) || "loading", S.text(detail.message)?.slice(0, 500) || "Обрабатываю страницу…") });
     }); respond({ ok: true }); return;
   }
   if (![chrome.runtime.getURL("popup.html"), chrome.runtime.getURL("dashboard.html")].includes(sender.url)) return;
   const operations = {
-    STATE: () => getState(false), DATA: () => getState(true), TABS: listTabs,
+    STATE: () => getState(false), DATA: () => getState(true), TASK: () => getTask(message.options?.id), TABS: listTabs,
     START: () => startRun(message.options || {}), ENRICH: () => startRun(message.options || {}, true),
     NAV_SCAN: () => inspectNavigation(message.options || {}), NAV_CHOOSE: () => chooseNavigation(message.options || {}), PICK: () => enablePicker(message.options || {}),
-    FINISH_SEARCH: async () => { const { run } = await chrome.storage.local.get("run"); if (!run || !["paused", "stopped"].includes(run.status) || run.phase === "details" || processing || starting) throw new Error("Нет остановленного сбора выдачи."); await chrome.storage.local.set({ run: { ...run, status: "running", pending_navigation: null } }); await beginDetails(run.id, "Пользователь завершил сбор выдачи."); void processRun(); return {}; },
+    FINISH_SEARCH: async () => { const id = await withStateLock(async () => { const { run } = await chrome.storage.local.get("run"); if (!run || !["paused", "stopped"].includes(run.status) || run.phase === "details" || processing || starting) throw new Error("Нет остановленного сбора выдачи."); await persistState({ run: { ...run, status: "running", pending_navigation: null } }); return run.id; }); await beginDetails(id, "Пользователь завершил сбор выдачи."); void processRun(); return {}; },
     RESET_PROFILE: async () => { const tab = await selectedTab(message.options); return withStateLock(async () => { const { profiles = {} } = await chrome.storage.local.get("profiles"); delete profiles[new URL(tab.url).origin]; await chrome.storage.local.set({ profiles, last_navigation: null }); return {}; }); },
     PAUSE: () => pauseRun(), STOP: () => pauseRun("stopped"), RESUME: () => resumeRun(message.options || {}),
     EXPORT: () => exportCollection(message.options?.format || "json"), IMPORT: () => importCollection(message.options?.data),
@@ -477,7 +525,7 @@ async function recordOpenedTab(tab) {
     const { run } = await chrome.storage.local.get("run"); const pending = run?.pending_navigation;
     if (!pending || Date.now() - pending.started_at > 20000 || tab.id === pending.source_tab_id) return;
     const related = tab.openerTabId === pending.source_tab_id || pending.candidate.href && S.canonicalUrl(tab.url) === S.canonicalUrl(pending.candidate.href);
-    if (related) await chrome.storage.local.set({ run: { ...run, pending_navigation: { ...pending, opened_ids: [...new Set([...(pending.opened_ids || []), tab.id])] } } });
+    if (related) await persistState({ run: { ...run, pending_navigation: { ...pending, opened_ids: [...new Set([...(pending.opened_ids || []), tab.id])] } } });
   });
 }
 if (chrome.tabs.onCreated) chrome.tabs.onCreated.addListener(tab => { void recordOpenedTab(tab); });

@@ -87,7 +87,11 @@ async function createHarness(browser, t) {
         }
         for (const observer of observers) observer(changes, "local");
       },
-      async remove(keys) { for (const key of keys) delete data[key]; }
+      async remove(keys) {
+        const changes = {};
+        for (const key of typeof keys === "string" ? [keys] : keys) { if (data[key] !== undefined) changes[key] = { oldValue: structuredClone(data[key]) }; delete data[key]; }
+        for (const observer of observers) observer(changes, "local");
+      }
     } },
     tabs: {
       async get(id) { const target = tabs.get(id); if (!target) throw new Error("Tab closed"); return { id, url: target.url(), status: "complete" }; },
@@ -120,7 +124,7 @@ async function createHarness(browser, t) {
   function restart() {
     runtimeHandlers = []; startupHandlers = []; alarmHandlers = []; createdHandlers = []; updatedHandlers = [];
     sandbox = vm.createContext({
-      chrome, URL, Date, crypto, console,
+      chrome, URL, Date, crypto, console, TextEncoder, btoa,
       setTimeout(callback, delay) {
         const timer = setTimeout(() => { timers.delete(timer); callback(); }, delay);
         timers.add(timer);

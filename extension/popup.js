@@ -22,7 +22,6 @@ async function refresh() {
       $("pages").value = state.preferences.max_pages || 1;
       $("scroll").checked = state.preferences.scroll !== false;
       $("interval").value = state.preferences.interval_seconds || 3;
-      $("enrich").checked = state.preferences.enrich !== false;
       $("raw").checked = state.preferences.raw !== false;
       $("responses").checked = state.preferences.observe_responses === true;
     }
@@ -36,8 +35,13 @@ async function refresh() {
   $("stop").disabled = !running;
   $("resume").disabled = !["paused", "stopped"].includes(state.run?.status);
   $("show-tab").hidden = !state.run || state.run.status !== "paused";
-  $("clear").disabled = running || !state.count;
-  $("export").disabled = !state.count;
+  $("clear").disabled = running || !state.can_clear;
+  $("export").disabled = !state.count && !state.task_count;
+  $("export-xlsx").disabled = !state.count && !state.task_count;
+  $("task-count").textContent = `Заданий в памяти: ${state.task_count}`;
+  const run = state.run;
+  $("progress").value = !run ? 0 : run.status === "finished" ? 100 : run.phase === "details" ? 100 * run.detail_index / Math.max(1, run.detail_total) : 100 * run.completed_pages / Math.max(1, run.max_pages);
+  $("progress-label").textContent = run ? `${run.query || "Текущее задание"} · Страницы: ${run.completed_pages}/${run.max_pages}${run.phase === "details" ? ` · Карточки: ${run.detail_index}/${run.detail_total}` : ""} · Товаров сохранено: ${state.tasks.find(task => task.id === run.id)?.product_count || 0}` : "";
   $("badge").textContent = running ? "Идёт сбор" : state.run?.status === "paused" ? "Пауза" : "Готов к сбору";
   $("badge").dataset.running = String(running);
   $("status").textContent = state.run?.message || "Результаты сохраняются между запусками.";
@@ -71,7 +75,7 @@ $("collect-form").addEventListener("submit", event => {
     max_pages: Number($("pages").value),
     interval_seconds: Number($("interval").value),
     scroll: $("scroll").checked,
-    enrich: $("enrich").checked,
+    enrich: false,
     raw: $("raw").checked,
     observe_responses: $("responses").checked
   }); });
@@ -81,11 +85,12 @@ $("show-tab").addEventListener("click", () => { void action(() => send("SHOW_TAB
 $("resume").addEventListener("click", () => { void action(() => send("RESUME", { interval_seconds: Number($("interval").value) })); });
 $("dashboard").addEventListener("click", () => { void action(() => send("OPEN_DASHBOARD")); });
 $("export").addEventListener("click", () => { void action(() => send("EXPORT")); });
+$("export-xlsx").addEventListener("click", () => { void action(() => send("EXPORT", { format: "xlsx" })); });
 $("clear").addEventListener("click", () => {
-  if (confirm("Удалить все собранные товары из браузера? Сначала скачайте JSON, если данные нужны.")) void action(() => send("CLEAR"));
+  if (confirm("Обнулить всю память приложения: товары, исходные карточки, задания, журнал, настройки и образцы сайтов? Действие необратимо. Сначала сохраните JSON или Excel.")) void action(async () => { await send("CLEAR"); $("collect-form").reset(); initialized = false; });
 });
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && (changes.collection || changes.run)) void refresh().catch(showError);
+  if (area === "local" && (changes.collection || changes.run || changes.tasks || changes.preferences)) void refresh().catch(showError);
 });
 void refresh().catch(showError);
 if (chrome.tabs?.query) void chrome.tabs.query({ active: true, currentWindow: true }).then(tabs => { activeTab = tabs[0]; });

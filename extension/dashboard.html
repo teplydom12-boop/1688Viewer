@@ -1,35 +1,36 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Supplier Viewer — поставщики</title><link rel="stylesheet" href="dashboard.css"></head>
 <body>
-  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>Карточки товаров на разных сайтах</small></div></div><span class="local">Данные хранятся в вашем браузере</span><span class="version">0.4</span></header>
+  <header><div class="brand"><span class="mark">SV</span><div><strong>Supplier Viewer</strong><small>Карточки товаров на разных сайтах</small></div></div><span class="local">Данные хранятся в вашем браузере</span><span class="version">0.5</span></header>
   <main>
     <aside>
-      <h2>Новый сбор</h2><p class="muted">Откройте сайт с товарами и выберите его вкладку. Доступ к новому сайту разрешается отдельно.</p>
+      <h2>Новое задание</h2><p class="muted">Откройте сайт с товарами и выберите его вкладку. Доступ к новому сайту разрешается отдельно.</p>
       <form id="collect-form">
         <label for="tab">Вкладка с выдачей</label><div class="tab-picker"><select id="tab" required><option value="">Загрузка вкладок…</option></select><button id="refresh-tabs" type="button" title="Обновить список вкладок">↻</button></div>
         <label for="query">Метка поиска</label><input id="query" maxlength="300" placeholder="Запрос или «Фото №1»"><small class="hint">Необязательно. Текстовый запрос определяется автоматически.</small>
         <div class="two-fields"><div><label for="pages">Страниц</label><input id="pages" type="number" min="1" max="20" value="1" required></div><div><label for="interval">Пауза, сек.</label><input id="interval" type="number" min="1" max="30" value="3" required></div></div>
         <label class="check"><input id="scroll" type="checkbox" checked><span>Догружать выдачу прокруткой</span></label>
-        <label class="check"><input id="enrich" type="checkbox" checked><span>Получать данные магазинов<small>После выдачи открывать карточки по очереди</small></span></label>
         <label class="check"><input id="responses" type="checkbox"><span>Дополнять данные из ответов сайта<small>Опционально, без дополнительных запросов</small></span></label>
         <label class="check"><input id="raw" type="checkbox" checked><span>Сохранять исходные карточки<small>Для повторного анализа без нового сбора</small></span></label>
-        <button id="collect" class="primary wide" type="submit">Начать сбор</button>
+        <button id="collect" class="primary wide" type="submit">Запустить задание</button>
       </form>
-      <button id="enrich-all" class="wide" type="button">Проверить собранные карточки</button>
+      <details class="existing-tools"><summary>Дополнительные инструменты</summary><button id="enrich-all" class="wide" type="button">Проверить собранные карточки</button><small class="hint">Только по отдельному запуску. Новое задание собирает выдачу без обхода карточек.</small></details>
       <p class="footnote">Новые вкладки отслеживаются. При капче или неоднозначном переходе работа приостанавливается.</p>
       <div class="site-tools"><h2>Настройка по образцу</h2><button id="pick-card" class="wide">Указать карточку на странице</button><button id="pick-next" class="wide">Указать кнопку перелистывания</button><button id="reset-profile" class="quiet wide">Сбросить образцы этого сайта</button><small class="hint">Выберите элемент одним кликом. Выбор сохранится для сайта. Esc — отмена.</small></div>
       <div class="import-actions"><button id="import" type="button">Импорт JSON</button><button id="reparse" type="button">Переразобрать карточки</button><input id="import-file" type="file" accept=".json,application/json" hidden></div>
-      <button id="clear" class="danger wide" type="button">Очистить данные</button>
+      <button id="clear" class="danger wide" type="button">Обнулить память</button>
     </aside>
     <section class="workspace">
-      <div class="page-heading"><div><h1>Поставщики и их товары</h1><p class="muted">Группировка по идентификатору или ссылке магазина. Совпадение названий не объединяет компании.</p></div><div class="exports"><button id="export-csv">CSV для Excel</button><button id="export-json" class="primary">Скачать JSON</button><button id="export-raw">Сырой JSON</button></div></div>
+      <div class="page-heading"><div><h1>Поставщики и их товары</h1><p class="muted">Группировка по идентификатору или ссылке магазина. Совпадение названий не объединяет компании.</p></div><div class="exports"><button id="export-xlsx">Excel (.xlsx)</button><button id="export-csv">CSV</button><button id="export-json" class="primary">Скачать JSON</button><button id="export-raw">Сырой JSON</button></div></div>
       <div class="stats"><div><strong id="supplier-count">0</strong><span>поставщиков определено</span></div><div><strong id="count">0</strong><span>товаров собрано</span></div><div><strong id="unresolved-count">0</strong><span>товаров без поставщика</span></div><div><strong id="missing-names">0</strong><span>товаров без имени магазина</span></div></div>
       <section class="job" aria-label="Текущая работа"><div class="job-heading"><span id="badge">Готов к сбору</span><span id="stage">Задание не запущено</span><div class="job-buttons"><button id="show-tab" disabled>Рабочая вкладка</button><button id="pause" disabled>Пауза</button><button id="resume" disabled>Продолжить</button></div></div><p id="status" role="status" aria-live="polite">Данные появятся после сбора или импорта JSON.</p><progress id="progress" max="100" value="0"></progress><p id="progress-label" class="muted"></p><p id="error" role="alert" class="error" hidden></p><ul id="warnings" class="warnings" hidden></ul></section>
       <section class="navigation-panel"><div class="navigation-heading"><h2>Как перейти к следующим товарам</h2><button id="scan-nav">Определить навигацию</button></div><p id="nav-summary" class="muted">Алгоритм проверяет подписи, стрелки, номера страниц и ссылки.</p><div id="navigation-options"></div><div class="recovery-actions"><button id="resume-tab" disabled>Продолжить в выбранной вкладке</button><button id="grant-required" hidden>Разрешить доступ и продолжить</button><button id="finish-search" disabled>Выдача закончилась</button></div></section>
+      <section class="task-history" aria-label="История заданий"><div class="navigation-heading"><h2>История заданий</h2><span id="task-count" class="muted">0 заданий</span></div><p class="muted">Каждый поиск сохраняется отдельно и дополняет общую память. Экспорт включает все задания. Процент показывает продвижение до заданного лимита страниц.</p><div class="table-wrap"><table class="supplier-table"><thead><tr><th>Задание / начало</th><th>Площадка</th><th>Состояние</th><th>Прогресс</th><th>Товаров</th></tr></thead><tbody id="tasks"></tbody></table><p id="tasks-empty" class="muted">Пока нет заданий.</p></div></section>
+      <label for="task-filter">Показать результаты</label><select id="task-filter"><option value="">Вся память</option></select><p id="task-view-note" class="muted">Последние сохранённые сведения о каждом уникальном товаре.</p>
       <div class="filter-row"><input id="filter" type="search" placeholder="Найти поставщика или товар" aria-label="Фильтр поставщиков и товаров"><select id="source-filter" aria-label="Маркетплейс"><option value="">Все площадки</option><option value="1688">1688</option><option value="alibaba">Alibaba</option><option value="made-in-china">Made-in-China</option></select><span id="filtered-count" class="muted"></span></div>
       <div class="table-wrap"><table class="supplier-table"><thead><tr><th>Поставщик / товар</th><th>Площадка</th><th>Товаров</th><th>Магазин</th><th>Данные</th></tr></thead><tbody id="suppliers"></tbody></table><div id="empty" class="empty"><h3>Начните с одного поиска</h3><p>Выберите вкладку слева или импортируйте уже собранный JSON.<br>Здесь появятся поставщики, а под каждым — найденные товары.</p></div></div>
       <section id="unresolved-section" class="unresolved" hidden><h2>Поставщик пока не определён</h2><p class="muted">Эти товары не объединяются в вымышленную компанию. Проверка карточек может заполнить недостающие поля.</p><div id="unresolved"></div></section>
-      <details class="activity" open><summary>Журнал действий</summary><ol id="log"><li class="muted">Работа ещё не запущена.</li></ol></details>
+      <details class="activity" open><summary id="log-title">Журнал текущего задания</summary><ol id="log"><li class="muted">Работа ещё не запущена.</li></ol></details>
     </section>
   </main>
   <script src="shared.js"></script><script src="navigation.js"></script><script src="generic.js"></script><script src="data-sources.js"></script><script src="engine.js"></script><script src="dashboard.js"></script>
